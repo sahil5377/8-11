@@ -1,0 +1,549 @@
+PostsService
+
+using AutoMapper;
+using BBMC.API.MarketingCenter.Models.DTOs;
+using BBMC.API.MarketingCenter.Models.Entities;
+using BBMC.API.MarketingCenter.Models.Response;
+using BBMC.API.MarketingCenter.Repository.Contracts;
+using BBMC.API.MarketingCenter.Service.Contracts;
+using BBMC.CoreService.Models.DTOs;
+using BBMC.CoreService.Models.Entities;
+
+namespace BBMC.API.MarketingCenter.Service.Services;
+
+public class PostsService
+    : IPostsService
+{
+    private readonly IPostDisplayCategoriesRepository _displayCategoriesRepository;
+    private readonly IFileRepository _fileRepository;
+    private readonly IMapper _mapper;
+    private readonly IBrochureRepository _brochureRepository;
+    private readonly IPostRepository _postRepository;
+
+    public PostsService(
+        IPostDisplayCategoriesRepository displayCategoriesRepository
+        , IFileRepository fileRepository,
+        IMapper mapper,
+        IBrochureRepository brochureRepository,
+        IPostRepository postRepository)
+    {
+        _displayCategoriesRepository = displayCategoriesRepository;
+        _fileRepository = fileRepository;
+        _mapper = mapper;
+        _brochureRepository = brochureRepository;
+        _postRepository = postRepository;
+    }
+
+    /// <summary>
+    /// Retrieves all posts associated with a specific subcategory.
+    /// </summary>
+    /// <param name="fourthlevelcategoryId">The ID of the fourthlevelcategory to retrieve posts for.</param>
+    /// <returns>A task that fourthlevelcategoryId the asynchronous operation. The task result contains a list of PostDTO objects.</returns>
+    public async Task<List<PostDto>> GetAllPostsByFourthLevelCategoryId(string fourthlevelcategoryId)
+    {
+        var posts = await _displayCategoriesRepository.GetPostsByFourthLevelCategoryId(fourthlevelcategoryId);
+
+        var dtos = posts.Select((post) =>
+        {
+            return new PostDto
+            {
+                Id = post.Id,
+                LandingPagePrettyUrl = post.PrettyUrl,
+                Title = post.Title,
+                ThumbnailId = post?.TeaserThumbnailId,
+                Teaser = post?.Teaser,
+                TeaserTitle = post?.TeaserTitle,
+                TeaserButtonText = post?.TeaserButtonText,
+                EnableStaticDocument = post?.EnableStaticDocument,
+                Updated = post?.Updated,
+                Created = post?.Created,
+                Sort = post?.Sort
+            };
+        });
+
+        return [.. dtos];
+    }
+
+    /// <summary>
+    /// Retrieves all posts associated with a specific subcategory.
+    /// </summary>
+    /// <param name="fifthlevelcategoryId">The ID of the fifthlevelcategory to retrieve posts for.</param>
+    /// <returns>A task that fifthlevelcategoryId the asynchronous operation. The task result contains a list of PostDTO objects.</returns>
+    public async Task<List<PostDto>> GetAllPostsByFifthLevelCategoryId(string fifthlevelcategoryId)
+    {
+        var posts = await _displayCategoriesRepository.GetPostsByFifthLevelCategoryId(fifthlevelcategoryId);
+
+        var dtos = posts.Select((post) =>
+        {
+            return new PostDto
+            {
+                Id = post.Id,
+                LandingPagePrettyUrl = post.PrettyUrl,
+                Title = post.Title,
+                ThumbnailId = post?.TeaserThumbnailId,
+                Teaser = post?.Teaser,
+                TeaserTitle = post?.TeaserTitle,
+                TeaserButtonText = post?.TeaserButtonText,
+                EnableStaticDocument = post?.EnableStaticDocument,
+                Updated = post?.Updated,
+                Created = post?.Created,
+                Sort = post?.Sort
+            };
+        });
+
+        return [.. dtos];
+    }
+
+    /// <summary>
+    /// Retrieves all posts associated with a specific interior subcategory.
+    /// </summary>
+    /// <param name="interiorSubCategoryId">The ID of the interior subcategory to retrieve posts for.</param>
+    /// <returns>A task that represents the asynchronous operation. The task result contains a list of PostDTO objects.</returns>
+    public async Task<List<PostDto>> GetAllPostsByInteriorSubCategoryId(string interiorSubCategoryId)
+    {
+        var posts = await _displayCategoriesRepository
+            .GetPostsByInteriorSubcategoryId(interiorSubCategoryId);
+
+        var dtos = posts.Select((post) =>
+        {
+            return new PostDto
+            {
+                Id = post.Id,
+                LandingPagePrettyUrl = post.PrettyUrl,
+                Title = post.Title,
+                ThumbnailId = post?.TeaserThumbnailId,
+                Teaser = post?.Teaser,
+                TeaserTitle = post?.TeaserTitle,
+                TeaserButtonText = post?.TeaserButtonText,
+                EnableStaticDocument = post?.EnableStaticDocument,
+                Updated = post?.Updated,
+                Created = post?.Created,
+                Sort = post?.Sort,
+                LinkedInteriorSubCategoryId = post?.LinkedInteriorSubCategoryId,
+                DisplayCategories = post.DisplayCategories == null ? null : new DisplayCategoriesDto
+                {
+                    Category = post.DisplayCategories.Category == null ? null : new CategoryDto
+                    {
+                        Id = post.DisplayCategories.Category.Id,
+                        Name = post.DisplayCategories.Category.Name
+                    },
+                    Subcategory = post.DisplayCategories.Subcategory == null ? null : new SubCategoryDto
+                    {
+                        Id = post.DisplayCategories.Subcategory.Id,
+                        Name = post.DisplayCategories.Subcategory.Name
+                    },
+                    InternalSubcategory = post.DisplayCategories.InternalSubcategory == null ? null : new InternalSubCategoryDto
+                    {
+                        Id = post.DisplayCategories.InternalSubcategory.Id,
+                        Name = post.DisplayCategories.InternalSubcategory.Name
+                    },
+                    Id = post.DisplayCategories.Id
+                },
+                IsUserFavorite = post.UserFavoriteId != null
+            };
+        });
+
+        return [.. dtos];
+    }
+
+    /// <summary>
+    /// Retrieves all posts associated with a specific interior subcategory.
+    /// </summary>
+    /// <param name="interiorSubCategoryId">The ID of the interior subcategory to retrieve posts for.</param>
+    /// <returns>A task that represents the asynchronous operation. The task result contains a list of DisplayPostsDto objects grouped.</returns>
+    /// 
+    /// 
+    public async Task<List<ResponseDisplayPostsDto>> GetAllPostsByInteriorSubCategoryIdGrouped(string interiorSubCategoryId)
+    {
+        List<ResponseDisplayPostsDto> posts = _mapper.Map<List<ResponseDisplayPostsDto>>(await _displayCategoriesRepository
+            .GetPostsGroupedByInteriorSubcategory(interiorSubCategoryId));
+
+        return posts;
+    }
+
+    public async Task<List<CategoryPostDto>> GetCategoryLevelPostsAsync(CategoryPostsFilterDto filter)
+    {
+        List<CategoryPost> categoryPosts = await _displayCategoriesRepository.GetPostsByCategoryLevelAsync(filter);       
+        var dtos = categoryPosts.Select(categoryPost => new CategoryPostDto
+        {
+            Id=categoryPost.Id,
+            Name = categoryPost.Name,
+            Count = categoryPost.Count,
+            Posts = categoryPost.Posts.Select(post =>  new PostDto
+            {
+                Id = post.Id,
+                Title = post.Title,
+                LandingPagePrettyUrl = post.PrettyUrl,
+                ThumbnailId = post?.TeaserThumbnailId,
+                Teaser = post?.Teaser,
+                TeaserTitle = post?.TeaserTitle,
+                TeaserButtonText = post?.TeaserButtonText,
+                EnableStaticDocument = post?.EnableStaticDocument,
+                Updated = post?.Updated,
+                Created = post?.Created,
+                Sort = post?.Sort,
+                LinkedInteriorSubCategoryId = post?.LinkedInteriorSubCategoryId,
+                IsUserFavorite = post.UserFavoriteId != null,
+                DisplayCategories = post.DisplayCategories != null ? new DisplayCategoriesDto
+                {
+                    Subcategory = post.DisplayCategories.Subcategory != null ? new SubCategoryDto
+                    {
+                        Id = post.DisplayCategories.Subcategory.Id?.ToString(),
+                        Name = post.DisplayCategories.Subcategory.Name
+                    } : null,
+                    InternalSubcategory = post.DisplayCategories.InternalSubcategory != null ? new InternalSubCategoryDto
+                    {
+                        Id = post.DisplayCategories.InternalSubcategory.Id?.ToString(),
+                        Name = post.DisplayCategories.InternalSubcategory.Name
+                    } : null,
+                    Id = post.DisplayCategories.Id
+                } : null,
+                DetailsLine1 = post.Display?.DetailsLine1,
+                DetailsLine2 = post.Display?.DetailsLine2,
+                ThumbnailTag = post.Display?.ThumbnailTags,
+                ThumbnailCustomTag = post.Display?.Custom,
+                TemplateType = post.General?.TemplateType,
+            }).ToList()
+        }).ToList();
+
+        return dtos;
+    }
+
+    public async Task<PostDto> GetHighlightedPostByCategoryAsync(string categoryId)
+    {
+        var post = await _displayCategoriesRepository.GetHighlightedPostsByCategoryAsync(categoryId);
+        if (post == null) return null;
+
+        return new PostDto
+        {
+            Id = post.Id,
+            Title = post.Title,
+            LandingPagePrettyUrl = post.PrettyUrl,
+            ThumbnailId = post.TeaserThumbnailId,
+            Teaser = post.Teaser,
+            ThumbnailCustomTag = post.Display?.Custom,
+            ThumbnailTag = post.Display?.ThumbnailTags,
+            Updated = post.Updated,
+            IsUserFavorite = post.UserFavoriteId != null,
+        };
+    }
+    /// <summary>
+    /// Retrieves all posts associated with a specific subcategory.
+    /// </summary>
+    /// <param name="subCategoryId">The ID of the subcategory to retrieve posts for.</param>
+    /// <returns>A task that subCategoryId the asynchronous operation. The task result contains a list of PostDTO objects.</returns>
+    public async Task<List<PostDto>> GetAllPostsBySubCategoryId(string subCategoryId)
+    {
+        var posts = await _displayCategoriesRepository
+            .GetPostsBySubcategoryId(subCategoryId);
+
+        var dtos = posts.Select((post) =>
+        {
+            return new PostDto
+            {
+                Id = post.Id,
+                LandingPagePrettyUrl = post.PrettyUrl,
+                Title = post.Title,
+                ThumbnailId = post?.TeaserThumbnailId,
+                Teaser = post?.Teaser,
+                TeaserTitle = post?.TeaserTitle,
+                TeaserButtonText = post?.TeaserButtonText,
+                EnableStaticDocument = post?.EnableStaticDocument,
+                Updated = post?.Updated,
+                Created = post?.Created,
+                AuthorDetails = post?.AuthorDetails,
+                Sort = post?.Sort
+
+            };
+        });
+
+        return [.. dtos];
+    }
+
+    /// <summary>
+    /// Retrieves search results based on the provided search input.
+    /// </summary>
+    /// <param name="searchInput">The search term to use for retrieving results.</param>
+    /// <returns>A task that represents the asynchronous operation. The task result contains a list of SearchResponseDTO objects.</returns>
+    public async Task<List<SearchResponseDTO>> GetSearchResults(string searchInput)
+    {
+        var posts = await _displayCategoriesRepository
+            .Search(searchInput);
+
+        var mappingTasks = posts.Select(async (post) =>
+        {
+            var thumbnail = string.IsNullOrWhiteSpace(post.TeaserThumbnailId) ?
+                null :
+                await _fileRepository.GetFileById(post.TeaserThumbnailId);
+
+            return new SearchResponseDTO
+            {
+                CategoryTitle = post.CategoryTitle,
+                SubCategoryTitle = post.SubCategoryTitle,
+                InteriorSubCategoryTitle = post.InteriorSubCategoryTitle,
+                TeaserThumbnailId = thumbnail?.Url,
+                PrettyUrl = post.PrettyUrl,
+                TemplateTitle = post.TemplateTitle,
+                Teaser = post?.Teaser,
+                TeaserTitle = post?.TeaserTitle,
+                TeaserButtonText = post?.TeaserButtonText,
+                EnableStaticDocument = post?.EnableStaticDocument,
+            };
+        });
+
+        var dtos = await Task.WhenAll(mappingTasks);
+
+        return [.. dtos];
+    }
+
+    /// <summary>
+    /// Retrieves search results based on the provided search input.
+    /// </summary>
+    /// <param name="searchInput">The search term to use for retrieving results.</param>
+    /// <returns>A task that represents the asynchronous operation. The task result contains a list of SearchTagsResponseDTO objects.</returns>
+    public async Task<ResponsePaginationDto<List<PostSearchResponseDTO>>> GetSearchResultsByTags(int pageNumber, int pageSize, string searchInput)
+    {
+        return await _displayCategoriesRepository.SearchByTags(pageNumber,pageSize,searchInput);        
+    }
+
+    /// <summary>
+    /// Retrieves and groups posts by a specific interior subcategory ID.
+    /// </summary>
+    /// <param name="interiorSubCategoryId">The ID of the interior subcategory.</param>
+    /// <returns>A task representing the asynchronous operation, containing a list of grouped response display post DTOs.</returns>
+    public async Task<List<SearchResponseDTO>> GetSearchResults(string searchInput, List<string> postsIds)
+    {
+        var posts = await _displayCategoriesRepository
+            .Search(searchInput, postsIds);
+
+        var mappingTasks = posts.Select(async (post) =>
+        {
+            var thumbnail = string.IsNullOrWhiteSpace(post.TeaserThumbnailId) ?
+                null :
+                await _fileRepository.GetFileById(post.TeaserThumbnailId);
+
+            return new SearchResponseDTO
+            {
+                CategoryTitle = post.CategoryTitle,
+                SubCategoryTitle = post.SubCategoryTitle,
+                InteriorSubCategoryTitle = post.InteriorSubCategoryTitle,
+                TeaserThumbnailId = thumbnail?.Url,
+                PrettyUrl = post.PrettyUrl,
+                TemplateTitle = post.TemplateTitle,
+                Teaser = post?.Teaser,
+                TeaserTitle = post?.TeaserTitle,
+                TeaserButtonText = post?.TeaserButtonText,
+                EnableStaticDocument = post?.EnableStaticDocument,
+                PostId = post?.Post_id
+            };
+        });
+
+        var dtos = await Task.WhenAll(mappingTasks);
+
+        return [.. dtos];
+    }
+
+    public async Task<List<BrochureTemplateOriginalNameDto>> GetOriginalTemplateName(List<string> brochureIds)
+    {
+        var results = await _brochureRepository.GetBrochureOriginalNameByPackage_id(brochureIds);
+        return results;
+    }
+
+    /// <summary>
+    /// Retrieves a list of Trending posts
+    /// </summary>
+    /// <returns></returns>
+    public async Task<List<PostTrendingDto>> GetTrendingPostsAsync()
+    {
+        List<Post> trendingPosts = await _postRepository.GetTrendingPostsAsync();
+        List<PostTrendingDto> result = _mapper.Map<List<PostTrendingDto>>(trendingPosts);
+        return result;
+    }
+
+    /// <summary>
+    /// Retrieves a Trending post
+    /// </summary>
+    /// <returns></returns>
+    public async Task<PostMostTrendingDto?> GetMostTrendingPostAsync()
+    {
+        Post trendingPost = await _postRepository.GetMostTrendingPostAsync();
+        if (trendingPost == null) return null;
+        SubCategory subCategory = await _postRepository.GetHotContentCategoryAsync();
+        PostMostTrendingDto result = _mapper.Map<PostMostTrendingDto>(trendingPost);
+        return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<PostMetaDTO?> GetPostMetaAsync(string prettyUrl)
+    {
+        Post post = await _postRepository.GetPostMetaAsync(prettyUrl);
+        return post != null ? _mapper.Map<PostMetaDTO>(post) : null;
+    }
+
+    public async Task<PostDetailDto?> GetPostDetailAsync(string prettyUrl)
+    {
+        var post = await _postRepository.GetPostDetailAsync(prettyUrl);
+        if (post == null)
+        {
+            return null;
+        }
+
+        post.TemplateDetails = await _postRepository.GetTemplateDetailsAsync(post.Id);
+        if(post.TemplateDetails == null)
+        {
+            return post;
+        }
+
+        List<string> templateIds = [post.TemplateDetails.Template.Id, post.TemplateDetails.Template425x6.Id, post.TemplateDetails.Template55x8.Id, post.TemplateDetails.Template55x8QR.Id];
+        templateIds.RemoveAll(item => item == null);
+        if(templateIds.Count == 0)
+        {
+            return post;
+        }
+        if (post.PostTypeId == 1) 
+        { 
+            string? brochureTemplateId = null;
+            if (!string.IsNullOrEmpty(post.TemplateDetails.Template.Id))
+                brochureTemplateId = post.TemplateDetails.Template.Id;
+            else
+            {
+                brochureTemplateId = !string.IsNullOrEmpty(post.TemplateDetails.Template55x8QR.Id) ? post.TemplateDetails.Template55x8QR.Id :
+                !string.IsNullOrEmpty(post.TemplateDetails.Template55x8.Id) ? post.TemplateDetails.Template55x8.Id :
+                !string.IsNullOrEmpty(post.TemplateDetails.Template425x6.Id) ? post.TemplateDetails.Template425x6.Id : null;
+            }
+            if (brochureTemplateId != null)
+            {
+                post.DetailThumbnails = await _postRepository.GetDetailThumbnailsByBrochureId(brochureTemplateId);
+            } 
+        }
+
+        var templates = await _postRepository.GetBrochureTemplatesAsync(templateIds);
+        post.TemplateOptions = CombineTemplateOptions(templates);
+
+        List<string> typeIds = templates.Select(x => x.GroupType).ToList();
+        List<string> subtypeIds = templates.Select(x => x.TemplateType).ToList();
+        var templateTypes = await _postRepository.GetTemplateTypesAsync(typeIds);
+        post.TemplateTypes = templateTypes.Select(type => new TemplateTypeDto
+        {
+            Id = type.Id,
+            Title = type.Title
+        }).ToList();
+        var specifications = GetTemplateSpecifications(templateTypes, subtypeIds);
+        post.TemplateSpecifications = new List<TemplateSpecificationDetailsDto>();
+        foreach (var specification in specifications)
+        {
+            List<TemplatePrintPricingDto> templatePricingList = new();
+            var prntShipPricingSpec = GetTemplatePricingSpec(specification.PrintShip);
+            var mailPricingSpec = GetTemplatePricingSpec(specification.MailList);
+            if (specification.DisplayInMail)
+            {
+                LoadMailPricingList(templatePricingList, mailPricingSpec);
+            }
+            
+            if (specification.DisplayInPrint)
+            {
+                LoadPrintShipPricingList(templatePricingList, prntShipPricingSpec);
+            }
+            post.TemplateSpecifications.Add(new TemplateSpecificationDetailsDto
+            { 
+                DisplayMail = specification.DisplayInMail,
+                DisplayPrint = specification.DisplayInPrint,
+                PrintPricing = templatePricingList,
+            });
+        }
+
+        return post;
+    }
+
+    private TemplateOptionsDto CombineTemplateOptions(List<BrochureTemplates> templates)
+    {
+        var options = new TemplateOptionsDto();
+        foreach (var template in templates)
+        {
+            options.DownloadPdf = template.DownloadPdf == 1 || options.DownloadPdf;
+            options.DownloadCropPdf = template.DownloadCropPdf == 1 || options.DownloadCropPdf;
+            options.DownloadPng = template.DownloadPng == 1 || options.DownloadPng;
+            options.DownloadVideo = template.DownloadVideo == 1 || options.DownloadVideo;
+            options.EmailToList = template.EmailToList == 1 || options.EmailToList;
+            options.PrintAndShip = template.PrintAndShip == 1 || options.PrintAndShip;
+            options.MailToList = template.MailToAList == 1 || options.MailToList;
+            options.ShareOnFacebook = template.ShareOnFacebook == 1 || options.ShareOnFacebook;
+            options.ShareOnInstagram = template.ShareOnInstagram == 1 || options.ShareOnInstagram;
+            options.ShareOnTwitterX = template.ShareOnTwitterX == 1 || options.ShareOnTwitterX;
+            options.ShareOnTikTok = template.ShareOnTikTok == 1 || options.ShareOnTikTok;
+            options.ShareOnLinkedIn = template.ShareOnLinkedIn == 1 || options.ShareOnLinkedIn;
+            options.TextToPhoneNumber = template.TextToAPhoneNumber == 1 || options.TextToPhoneNumber;
+        }
+        return options;
+    }
+
+    private List<TemplateSpecification> GetTemplateSpecifications(List<TemplateType> types, List<string> subtypeIds)
+    {
+        var result = new List<TemplateSpecification>();
+        foreach (var type in types)
+        {
+            List<TemplateSubType> subTypes = type.Subtypes.Where(x => subtypeIds.Contains(x.Id)).ToList();
+            result = result.Concat(subTypes.Where(x => x.Specification != null).Select(x => x.Specification)).ToList();           
+        }
+        return result;
+    }
+
+    private Dictionary<string, decimal> GetTemplatePricingSpec(SpecificationPrice? priceSpec)
+    {
+        Dictionary<string, decimal> priceList = new Dictionary<string, decimal>();
+        if(priceSpec == null || priceSpec.Quantity == null || priceSpec.Price == null)
+        {
+            return priceList;
+        }
+        for(var i=0;i<priceSpec.Quantity.Count;i++)
+        {
+            if(priceSpec.Quantity.ElementAtOrDefault(i) == null)
+            {
+                continue;
+            }
+            priceList.Add(priceSpec.Quantity.ElementAt(i), priceSpec.Price.ElementAtOrDefault(i));
+        }
+        return priceList;
+    }
+
+    private void LoadPrintShipPricingList(List<TemplatePrintPricingDto> list, Dictionary<string,decimal> pricingSpec)
+    {
+        foreach (var pair in pricingSpec)
+        {
+            TemplatePrintPricingDto? item = list.Find(x => x.Quantity == pair.Key);
+            if (item == null)
+            {
+                list.Add(new TemplatePrintPricingDto
+                {
+                    Quantity = pair.Key,
+                    PrintShip = pair.Value
+                });
+            }
+            else
+            {
+                item.PrintShip = pair.Value;
+            }
+        }
+    }
+
+    private void LoadMailPricingList(List<TemplatePrintPricingDto> list, Dictionary<string, decimal> pricingSpec)
+    {
+        foreach (var pair in pricingSpec)
+        {
+            TemplatePrintPricingDto? item = list.Find(x => x.Quantity == pair.Key);
+            if (item == null)
+            {
+                list.Add(new TemplatePrintPricingDto
+                {
+                    Quantity = pair.Key,
+                    MailList = pair.Value
+                });
+            }
+            else
+            {
+                item.MailList = pair.Value;
+            }
+        }
+    }
+
+}
