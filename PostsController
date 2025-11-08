@@ -1,0 +1,686 @@
+PostsController
+using BBMC.API.MarketingCenter.Models.DTOs;
+using BBMC.API.MarketingCenter.Models.Response;
+using BBMC.API.MarketingCenter.Service.Contracts;
+using BBMC.CoreService.Authorization;
+using BBMC.CoreService.Context;
+using BBMC.CoreService.ExtensionMethods;
+using BBMC.CoreService.LogsActivity.Contracts;
+using BBMC.CoreService.LogsActivity.Enums;
+using BBMC.CoreService.Models;
+using BBMC.CoreService.Models.Constants;
+using BBMC.CoreService.Models.DTOs;
+using BBMC.CoreService.Models.Entities;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+
+namespace BBMC.API.MarketingCenter.Controllers;
+
+public class PostsController
+    : BaseController
+{
+    private readonly IPostsService _postsService;
+    private readonly ILogsActivitiesServices _logsActivitiesServices;
+    private readonly ICategoriesService _categoriesService;
+    private const string PublicApiRoutePrefix = "~/api/v{version:apiVersion}/public/[controller]";
+    private readonly IPostShareService _postShareService;
+    private readonly ILogger<PostsController> _logger;
+    private readonly SessionContext _sessionContext;
+
+    public PostsController(
+        IPostsService postsService,
+        ILogsActivitiesServices logsActivitiesServices,
+        ICategoriesService categoriesService,
+        IPostShareService postShareService,
+        ILogger<PostsController> logger,
+        SessionContext sessionContext)
+    {
+        _postsService = postsService;
+        _logsActivitiesServices = logsActivitiesServices;
+        _categoriesService = categoriesService;
+        _postShareService = postShareService;
+        _logger = logger;
+        _sessionContext = sessionContext;
+    }
+
+    /// <summary>
+    /// Retrieves all posts by the specified interior sub-category ID.
+    /// </summary>
+    /// <param name="interiorSubCategoryId">The ID of the interior sub-category to retrieve posts for.</param>
+    /// <returns>A <see cref="ResponseDto{List{PostDto}}"/> containing the list of posts for the specified interior sub-category.</returns>
+    /// <response code="200">Returns the list of posts for the specified interior sub-category.</response>
+    /// <response code="400">An error occurred while retrieving the posts.</response>
+    /// <response code="500">An internal server error occurred while retrieving the posts.</response>
+    [HttpGet("posts")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<List<PostDto>>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<List<PostDto>>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<List<PostDto>>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> GetAllPostsByInteriorSubCategoryId(
+            [FromQuery, Bind(nameof(interiorSubCategoryId))] string interiorSubCategoryId, 
+            [FromQuery, Bind(nameof(groupId))] int groupId)
+    {
+        try
+        {
+            List<PostDto> results = [];
+
+            if (Request.IsBBUser())
+            {
+                _sessionContext.UserId = Request.GetUserId();
+                results = await _postsService.GetAllPostsByInteriorSubCategoryId(interiorSubCategoryId);
+            }
+            else
+            {
+                results = await _categoriesService.GetAllPostsByInteriorSubCategoryIdByAccountGroups(interiorSubCategoryId);
+                results = _categoriesService.SkipPostsByGroupId(groupId, results);
+            }
+
+            return Ok(CreateSerializedResponse(results));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error given an internal sub-category id: {interiorSubCategoryId}", ModuleService.CategoriesMarketingCenter);
+
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                ResponseError<List<PostDto>>(ex, "PostsController", "GetAllPostsByInternalSubCategoryId"));
+        }
+    }
+    /// <summary>
+    /// Retrieves all features.
+    /// </summary>
+    /// <returns>A <see cref="ResponseDto{FeatureDto}"/> containing the list of features with hide or show feature.</returns>
+    /// <response code="200">Returns the features.</response>
+    /// <response code="400">An error occurred while retrieving the features.</response>
+    /// <response code="500">An internal server error occurred while retrieving the features.</response>
+    [HttpGet("features")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<FeatureDto>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<FeatureDto>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<FeatureDto>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> GetFeatures()
+    {
+        ResponseDto<bool> response = new();
+        try
+        {
+            FeatureDto results;
+            if (Request.IsBBUser())
+            {
+                results = await _categoriesService.GetAllFeatures();
+            }
+            else
+            {
+                results = await _categoriesService.GetAllFeaturesByAccountGroups();
+            }
+            response.Success = true;
+            return Ok(results);
+        }
+        catch (ArgumentException ex)
+        {
+            return StatusCode(StatusCodes.Status400BadRequest,
+                ResponseError<FeatureDto>(ex, "PostsController", "GetFeatures"));
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                ResponseError<FeatureDto>(ex, "PostsController", "GetFeatures"));
+        }
+        finally
+        {
+            if (!response.Success)
+                _logger.LogError("Error get all features in module {Module}", ModuleService.CategoriesMarketingCenter);
+        }
+    }
+    /// <summary>
+    /// Retrieves all tiles.
+    /// </summary>
+    /// <returns>A <see cref="ResponseDto{TilesDto}"/> containing the list of tiles with hide or show tiles.</returns>
+    /// <response code="200">Returns the tiles.</response>
+    /// <response code="400">An error occurred while retrieving the tiles.</response>
+    /// <response code="500">An internal server error occurred while retrieving the tiles.</response>
+    [HttpGet("tiles")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<TilesDto>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<TilesDto>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<TilesDto>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> GetTiles()
+    {
+        ResponseDto<bool> response = new();
+        try
+        {
+            TilesDto results;
+
+            if (Request.IsBBUser())
+            {
+                results = await _categoriesService.GetAllTiles();
+            }
+            else
+            {
+                results = await _categoriesService.GetAllTilesByAccountGroups();
+            }
+            response.Success = true;
+            return Ok(results);
+        }
+        catch (ArgumentException ex)
+        {
+            return StatusCode(StatusCodes.Status400BadRequest,
+                ResponseError<TilesDto>(ex, "PostsController", "GetTiles"));
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                ResponseError<TilesDto>(ex, "PostsController", "GetTiles"));
+        }
+        finally
+        {
+            if (!response.Success)
+                _logger.LogError("Error get all tiles in module {Module}", ModuleService.CategoriesMarketingCenter);
+        }
+    }
+    /// <summary>
+    /// Retrieves all posts by the specified interior sub-category ID grouped by title.
+    /// </summary>
+    /// <param name="interiorSubCategoryId">The ID of the interior sub-category to retrieve posts for.</param>
+    /// <returns>A <see cref="ResponseDto{List{ResponseDisplayPostsDto}}"/> containing the list of posts for the specified interior sub-category.</returns>
+    /// <response code="200">Returns the list of posts for the specified interior sub-category.</response>
+    /// <response code="400">An error occurred while retrieving the posts.</response>
+    /// <response code="500">An internal server error occurred while retrieving the posts.</response>
+    [HttpGet("posts-grouped")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<List<ResponseDisplayPostsDto>>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<List<ResponseDisplayPostsDto>>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<List<ResponseDisplayPostsDto>>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> GetAllGroupedPostsByInteriorSubCategoryId(
+            [FromQuery, Bind(nameof(interiorSubCategoryId))] string interiorSubCategoryId, 
+            [FromQuery, Bind(nameof(groupId))] int groupId)
+    {
+        ResponseDto<List<ResponseDisplayPostsDto>> response = new();
+        try
+        {
+            List<ResponseDisplayPostsDto> posts = [];
+            if (Request.IsBBUser())
+            {
+                posts = await _postsService.GetAllPostsByInteriorSubCategoryIdGrouped(interiorSubCategoryId);
+            }
+            else
+            {
+                posts = await _categoriesService.GetAllPostsGroupedByInteriorSubCategoryIdByAccountGroups(interiorSubCategoryId);
+                posts = _categoriesService.SkipInteriorSubCategoryByGroupsId(groupId, posts);
+            }
+
+            response.Data = posts;
+            response.Success = true;
+
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                    $"Error given an internal sub-category id: {interiorSubCategoryId}",
+                    ModuleService.CategoriesMarketingCenter);
+
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                ResponseError<List<PostDto>>(ex, "PostsController", "GetAllPostsByInternalSubCategoryId"));
+        }
+    }
+
+    /// <summary>
+    /// Retrieves all posts by the specified interior sub-category ID.
+    /// </summary>
+    /// <param name="interiorSubCategoryId">The ID of the interior sub-category to retrieve posts for.</param>
+    /// <returns>A <see cref="ResponseDto{List{PostDto}}"/> containing the list of posts for the specified interior sub-category.</returns>
+    /// <response code="200">Returns the list of posts for the specified interior sub-category.</response>
+    /// <response code="400">An error occurred while retrieving the posts.</response>
+    /// <response code="500">An internal server error occurred while retrieving the posts.</response>
+    [HttpGet("interiorsubcategories/posts")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<List<PostDto>>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<List<PostDto>>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<List<PostDto>>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> GetAllPostByInteriorSubCategoryId(
+            [FromQuery, Bind(nameof(interiorSubCategoryId))] string interiorSubCategoryId, 
+            [FromQuery, Bind(nameof(groupId))] int groupId)
+    {
+        try
+        {
+            List<PostDto> results = [];
+            if (Request.IsBBUser())
+            {
+                results = await _postsService.GetAllPostsByInteriorSubCategoryId(interiorSubCategoryId);
+            }
+            else {
+                results = await _categoriesService.GetAllPostsByInteriorSubCategoryIdByAccountGroups(interiorSubCategoryId);
+                results = _categoriesService.SkipPostsByGroupId(groupId, results);
+            }
+
+            return Ok(CreateSerializedResponse(results));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                    $"Error given an internal sub-category id: {interiorSubCategoryId}",
+                    ModuleService.CategoriesMarketingCenter);
+
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                ResponseError<List<PostDto>>(ex, "PostsController", "GetAllPostsByInternalSubCategoryId"));
+        }
+    }
+
+    /// <summary>
+    /// Retrieves all posts by the specified sub-category ID.
+    /// </summary>
+    /// <param name="subCategoryId">The ID of the sub-category to retrieve posts for.</param>
+    /// <returns>A <see cref="ResponseDto{List{PostDto}}"/> containing the list of posts for the specified sub-category.</returns>
+    /// <response code="200">Returns the list of posts for the specified sub-category.</response>
+    /// <response code="400">An error occurred while retrieving the posts.</response>
+    /// <response code="500">An internal server error occurred while retrieving the posts.</response>
+    [HttpGet]
+    [Route("/api/v1/public/homepage/subcategories/posts")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<List<PostDto>>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<List<PostDto>>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<List<PostDto>>))]
+    [NonBBPublicAuthorization(Role.AnyRole)]
+    public async Task<IActionResult> GetAllPostsSubCategoryId(
+            [FromQuery, Bind(nameof(subCategoryId))] string subCategoryId, 
+            [FromQuery, Bind(nameof(groupId))] int groupId)
+    {
+        try
+        {
+            List<PostDto> subCategoriesPosts = [];
+            if (Request.IsBBTenant() || Request.IsBBUser())
+            {
+                subCategoriesPosts = await _postsService.GetAllPostsBySubCategoryId(subCategoryId);
+            }
+            else
+            {
+                subCategoriesPosts = await _categoriesService.GetAllPostsBySubCategoryIdGrouped(subCategoryId);
+                subCategoriesPosts = _categoriesService.SkipPostsByGroupId(groupId, subCategoriesPosts);
+            }
+
+            return Ok(CreateSerializedResponse(subCategoriesPosts));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                    $"Error given an internal sub-category id: {subCategoryId}",
+                    ModuleService.CategoriesMarketingCenter);
+
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                ResponseError<List<PostDto>>(ex, "PostsController", "GetAllPostsByInternalSubCategoryId"));
+        }
+    }
+
+    /// <summary>
+    /// Retrieves all posts by the specified fourthLevelCategoryId .
+    /// </summary>
+    /// <param name="fourthLevelCategoryId">The ID of the fourthLevelCategory to retrieve posts for.</param>
+    /// <returns>A <see cref="ResponseDto{List{PostDto}}"/> containing the list of posts for the specified fourthLevelCategory.</returns>
+    /// <response code="200">Returns the list of posts for the specified fourthLevelCategory.</response>
+    /// <response code="400">An error occurred while retrieving the posts.</response>
+    /// <response code="500">An internal server error occurred while retrieving the posts.</response>
+    [HttpGet("fourthlevelcategories/posts")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<List<PostDto>>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<List<PostDto>>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<List<PostDto>>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> GetAllPostsByFourthLevelCategoryId(
+        [FromQuery, Bind(nameof(fourthLevelCategoryId))] string fourthLevelCategoryId, 
+        [FromQuery, Bind(nameof(groupId))] int groupId)
+    {
+        try
+        {
+            List<PostDto> fourthLevelCategoriesPosts = [];
+            if (Request.IsBBUser())
+            {
+                fourthLevelCategoriesPosts = await _postsService.GetAllPostsByFourthLevelCategoryId(fourthLevelCategoryId);
+            }
+            else
+            {
+                fourthLevelCategoriesPosts = await _categoriesService.GetAllPostsByFourthLevelCategoryIdGrouped(fourthLevelCategoryId);
+                fourthLevelCategoriesPosts = _categoriesService.SkipPostsByGroupId(groupId, fourthLevelCategoriesPosts);
+            }
+
+            return Ok(CreateSerializedResponse(fourthLevelCategoriesPosts));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error given an fourthLevelCategoryId: {fourthLevelCategoryId}", ModuleService.CategoriesMarketingCenter);
+
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                ResponseError<List<PostDto>>(ex, "PostsController", "GetAllPostsByFourthLevelCategoryId"));
+        }
+    }
+
+    /// <summary>
+    /// Retrieves all posts by the specified fifthLevelCategoryId .
+    /// </summary>
+    /// <param name="fifthLevelCategoryId">The ID of the fifthLevelCategory to retrieve posts for.</param>
+    /// <returns>A <see cref="ResponseDto{List{PostDto}}"/> containing the list of posts for the specified fifthLevelCategory.</returns>
+    /// <response code="200">Returns the list of posts for the specified fifthLevelCategory.</response>
+    /// <response code="400">An error occurred while retrieving the posts.</response>
+    /// <response code="500">An internal server error occurred while retrieving the posts.</response>
+    [HttpGet("fifthlevelcategories/posts")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<List<PostDto>>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<List<PostDto>>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<List<PostDto>>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> GetAllPostsByFifthLevelCategoryId(
+        [FromQuery, Bind(nameof(fifthLevelCategoryId))] string fifthLevelCategoryId, 
+        [FromQuery, Bind(nameof(groupId))] int groupId)
+    {
+        try
+        {
+            List<PostDto> fifthLevelCategoriesPosts = [];
+            if (Request.IsBBUser())
+            {
+                fifthLevelCategoriesPosts = await _postsService.GetAllPostsByFifthLevelCategoryId(fifthLevelCategoryId);
+            }
+            else
+            {
+                fifthLevelCategoriesPosts = await _categoriesService.GetAllPostsByFifthLevelCategoryIdGrouped(fifthLevelCategoryId);
+                fifthLevelCategoriesPosts = _categoriesService.SkipPostsByGroupId(groupId, fifthLevelCategoriesPosts);
+            }
+
+            return Ok(CreateSerializedResponse(fifthLevelCategoriesPosts));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error given an fifthLevelCategoryId: {fifthLevelCategoryId}", ModuleService.CategoriesMarketingCenter);
+
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                ResponseError<List<PostDto>>(ex, "PostsController", "GetAllPostsByFifthLevelCategoryId"));
+        }
+    }
+
+    /// Retrieves the search results for the given search input.
+    /// </summary>
+    /// <param name="searchInput">The text input to search for.</param>
+    /// <returns>A <see cref="ResponseDto{List{SearchResponseDTO}}"/> containing the search results.</returns>
+    /// <response code="200">Returns the search results.</response>
+    /// <response code="400">Returns an error response if the search input is invalid.</response>
+    /// <response code="500">Returns an error response if there was an internal server error.</response>
+    [HttpGet("search")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<List<SearchResponseDTO>>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<List<SearchResponseDTO>>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<List<SearchResponseDTO>>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> GetSearchResults([FromQuery, Bind(nameof(searchInput))] string searchInput)
+    {
+        try
+        {
+            List<SearchResponseDTO> posts = [];
+            if (Request.IsBBUser())
+            {
+                posts = await _postsService.GetSearchResults(searchInput);
+            }
+            else
+            {
+                List<string> accountPostAllowed = await _categoriesService.GetAllowedPostsSearch();
+                posts = await _postsService.GetSearchResults(searchInput, accountPostAllowed);
+            }
+
+            _logger.LogError(
+                    $"Given an text input, returns all of its related templates: {searchInput}",
+                    ModuleService.PostsMarketingCenter);
+
+            return Ok(CreateSerializedResponse(posts));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                    $"Error given an text input, returns all of its related templates: {searchInput}",
+                    ModuleService.CategoriesMarketingCenter);
+
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                ResponseError<List<Posts>>(ex, "PostsController", "GetSearchResults"));
+        }
+    }
+    /// Retrieves the search results for the given search input.
+    /// </summary>
+    /// <param name="pageNumber">pageNumber for pagination.</param>
+    /// <param name="pageSize">pageSize for pagination.</param>
+    /// <param name="searchInput">The text input to search for.</param>
+    /// <returns>A <see cref="ResponseDto{ResponsePaginationDto{List{PostSearchResponseDTO}}}"/> containing the search results.</returns>
+    /// <response code="200">Returns the search results.</response>    
+    /// <response code="500">Returns an error response if there was an internal server error.</response>
+    [HttpGet("searchbytags")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<ResponsePaginationDto<List<PostSearchResponseDTO>>>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<ResponsePaginationDto<List<PostSearchResponseDTO>>>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<ResponsePaginationDto<List<PostSearchResponseDTO>>>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> GetSearchResultsByTags([FromQuery, Bind(nameof(pageNumber),nameof(pageSize), nameof(searchInput))] int pageNumber, int pageSize,string searchInput)
+    {
+        try
+        {
+            ResponseDto<ResponsePaginationDto<List<PostSearchResponseDTO>>> response = new();
+            response.Data = await _postsService.GetSearchResultsByTags(pageNumber, pageSize, searchInput);
+            response.Success = true;
+            response.Error = null;
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                ResponseError<List<PostSearchResponseDTO>>(ex, "PostsController", "GetSearchResultsByTags"));
+        }
+    }
+
+    [HttpPost(PublicApiRoutePrefix + "/" + nameof(GetOriginalTemplateName), Name = nameof(GetOriginalTemplateName))]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<List<BrochureTemplateOriginalNameDto>>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<List<BrochureTemplateOriginalNameDto>>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> GetOriginalTemplateName([FromBody] OriginalTemplateNameRequestDto request)
+    {
+        try
+        {
+            var response = new ResponseDto<List<BrochureTemplateOriginalNameDto>>();
+            response.Data = await _postsService.GetOriginalTemplateName([.. request.Ids.Split('|')]);
+            response.Success = true;
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                    "Error from {nameof(GetOriginalTemplateName)}",
+                    ModuleService.CategoriesMarketingCenter);
+
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                ResponseError<List<Posts>>(ex, nameof(PostsController), nameof(GetOriginalTemplateName)));
+        }
+    }
+
+    /// <summary>
+    /// Share Post to MMS and retreives sent mms id
+    /// </summary>
+    /// <param name="request"></param>
+    /// <returns></returns>
+    [HttpPost("Posts/ShareMMS")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<SaveCartItemResponseDto>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<SaveCartItemResponseDto>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<SaveCartItemResponseDto>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> ShareMMSPost([FromBody] PostMMSShareDto request)
+    {
+        try
+        {
+            request.UserId = Request.GetUserId();
+            request.IpAddress = IpAddress;
+            string mmsId = await _postShareService.ShareMMSPost(request);
+            _logger.LogInformation($"Shared {request.ImageUrl} via mms", ModuleService.PostsMarketingCenter,"shared-mms");
+
+            return Created(string.Empty,mmsId);
+        }
+        catch (ArgumentException ex)
+        {
+            return StatusCode(StatusCodes.Status400BadRequest,
+                ResponseError<PostMMSShareDto>(ex, "PostsController", "ShareMMSPost"));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"{nameof(PostsController)}, {nameof(ShareMMSPost)}");
+            _logger.LogError($"Error in sharing MMS for {request.ImageUrl}", ModuleService.PostsMarketingCenter);
+
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                ResponseError<PostMMSShareDto>(ex, nameof(PostsController), nameof(ShareMMSPost)));
+        }
+    }
+
+    [HttpGet]
+    [Route("/api/v1/public/homepage/category-posts")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<List<CategoryPostDto>>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<List<CategoryPostDto>>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<List<CategoryPostDto>>))]
+    [NonBBPublicAuthorization(Role.AnyRole)]
+    public async Task<IActionResult> GetAllCategoryLevelPosts([FromQuery] CategoryPostsFilterDto request)
+    {
+        try
+        {
+            _sessionContext.UserId = Request.TryGetUserId() ?? 0;
+            ResponseDto<List<CategoryPostDto>> response = new();
+            response.Data = await _postsService.GetCategoryLevelPostsAsync(request);
+            response.Success = true;
+            return Ok(response);
+        }
+        catch(Exception ex) {
+            _logger.LogError(ex, $"{nameof(PostsController)}, {nameof(GetAllCategoryLevelPosts)}");
+            return StatusCode(StatusCodes.Status500InternalServerError, ResponseError<PostDto>(ex, nameof(PostsController), nameof(GetAllCategoryLevelPosts)));
+        }
+    }
+
+    [HttpGet]
+    [Route("/api/v1/public/homepage/highlighted-post")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<PostDto>))]
+    [NonBBPublicAuthorization(Role.AnyRole)]
+    public async Task<IActionResult>GetHighlightedPost([FromQuery] string categoryId)
+    {
+        try
+        {
+            _sessionContext.UserId = Request.TryGetUserId() ?? 0;
+            var response = new ResponseDto<PostDto>
+            {
+                Data = await _postsService.GetHighlightedPostByCategoryAsync(categoryId),
+                Success = true,
+            };
+            return Ok(response);
+        }
+        catch(Exception ex)
+        {
+            _logger.LogError(ex, $"{nameof(PostsController)}, {nameof(GetHighlightedPost)}");
+            return StatusCode(StatusCodes.Status500InternalServerError, ResponseError<PostDto>(ex, nameof(PostsController), nameof(GetHighlightedPost)));
+        }
+    }
+
+    [HttpGet("Posts/Trendings")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<PostTrendingDto>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<PostTrendingDto>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> GetTrendingPostsAsync()
+    {
+        try
+        {
+            ResponseDto<List<PostTrendingDto>> response = new();
+            _sessionContext.UserId = Request.TryGetUserId() ?? 0;
+            response.Data = await _postsService.GetTrendingPostsAsync();
+            _logger.LogInformation("Fetched Homepage Trending post", ModuleService.PostsMarketingCenter);
+            response.Success = true;
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"{nameof(PostsController)}, {nameof(GetTrendingPostsAsync)}");
+            _logger.LogError("Error in fetching homepage trending post in module {Module}", ModuleService.PostsMarketingCenter);
+
+            return StatusCode(StatusCodes.Status500InternalServerError, ResponseError<PostTrendingDto>(ex, nameof(PostsController), nameof(GetTrendingPostsAsync)));
+        }
+    }
+
+    [HttpGet("Posts/Trendings/Most")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<PostMostTrendingDto>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<PostMostTrendingDto>))]
+    [Authorization(Role.AnyRole)]
+    public async Task<IActionResult> GetMostTrendingPostAsync()
+    {
+        try
+        {
+            ResponseDto<PostMostTrendingDto?> response = new();
+            response.Data = await _postsService.GetMostTrendingPostAsync();
+            _logger.LogInformation("Fetched Trending post", ModuleService.PostsMarketingCenter);
+            response.Success = true;
+            return Ok(response);
+        }
+        catch (Exception ex) 
+        {
+            _logger.LogError(ex, $"{nameof(PostsController)}, {nameof(GetMostTrendingPostAsync)}");
+            _logger.LogError("Error in fetching trending post in module {Module}", ModuleService.PostsMarketingCenter);
+
+            return StatusCode(StatusCodes.Status500InternalServerError, ResponseError<PostMostTrendingDto>(ex, nameof(PostsController), nameof(GetMostTrendingPostAsync)));
+        }
+    }
+
+    /// <summary>
+    /// This API endpoint is used to get post metadata from db
+    /// </summary>
+    /// <returns>StatusCodes.Status200 stored post metadata on success</returns>
+    /// <returns>StatusCodes.Status401 if user is not authorized or assigned the role</returns>
+    /// <returns>StatusCodes.Status500InternalServerError incase of other failures</returns>
+    [HttpGet($"{PublicApiRoutePrefix}/{{prettyUrl}}/Meta")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<PostMetaDTO?>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<PostMetaDTO?>))]
+    [BBMC.CoreService.Authorization.AllowAnonymous]
+    public async Task<IActionResult> GetPostMetaAsync([FromRoute] string prettyUrl)
+    {
+        try
+        {
+            ResponseDto<PostMetaDTO?> response = new();
+            response.Data = await _postsService.GetPostMetaAsync(prettyUrl);
+            response.Success = true;
+            return Ok(response);
+        }        
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"{nameof(PostsController)}, {nameof(GetPostMetaAsync)}");
+            return StatusCode(StatusCodes.Status500InternalServerError, ResponseError<PostMetaDTO>(ex, nameof(PostsController), nameof(GetPostMetaAsync)));
+        }
+    }
+
+    /// <summary>
+    /// Retrieves post details by the specified pretty url.
+    /// </summary>
+    /// <returns>StatusCodes.Status200 stored post detail on success</returns>
+    /// <returns>StatusCodes.Status401 if user is not authorized or assigned the role</returns>
+    /// <returns>StatusCodes.Status500 Internal Server Error incase of other failures</returns>
+    [HttpGet]
+    [Route("/api/v1/public/homepage/Posts/{prettyurl}")]
+    [ProducesResponseType(200, Type = typeof(ResponseDto<PostDetailDto?>))]
+    [ProducesResponseType(400, Type = typeof(ResponseDto<PostDetailDto?>))]
+    [ProducesResponseType(500, Type = typeof(ResponseDto<PostDetailDto?>))]
+    [NonBBPublicAuthorization(Role.AnyRole)]
+    public async Task<IActionResult> GetPostDetails(string prettyUrl)
+    {
+        try
+        {
+            
+            _sessionContext.UserId = Request.TryGetUserId()??0;
+            ResponseDto<PostDetailDto?> response = new();           
+            response.Data = await _postsService.GetPostDetailAsync(prettyUrl);            
+            response.Success = true;
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, $"{nameof(PostsController)}, {nameof(GetPostDetails)}");           
+            return StatusCode(StatusCodes.Status500InternalServerError, ResponseError<PostTrendingDto>(ex, nameof(PostsController), nameof(GetPostDetails)));
+        }
+    }
+
+    private string? IpAddress
+    {
+        get
+        {
+            if (Request.Headers.ContainsKey(ConstRequestHeaders.ForwarderIp))
+                return Request.Headers[ConstRequestHeaders.ForwarderIp];
+            else
+                return HttpContext.Connection.RemoteIpAddress?.MapToIPv4().ToString();
+        }
+    }
+}
