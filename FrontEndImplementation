@@ -1,0 +1,219 @@
+FrontEndImplementation
+
+import PostFavoriteIcon from "@/components/PostFavorite/PostFavoriteIcon";
+import { useUserStore } from "@/store/commons/user";
+import { useCategoryStore } from "@/store/marketing-center/categories";
+import { usePostsStore } from "@/store/marketing-center/posts";
+import { formatDate, formatGroup, getArticlePath } from "@/utils";
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import { Box, Button, Divider, Grid, Typography } from "@mui/material";
+import Image from "next/image";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { BB_SIDENAV_CATEGORIES } from "../../constants";
+import Styles from "./ArticleSubcategoryPanel.module.scss";
+
+interface ArticleSubCategoryNavbarProps {
+  subCategoryPrettyUrl: string;
+}
+const ArticleCommon = (props: ArticleSubCategoryNavbarProps) => {
+  const { subCategoryPrettyUrl } = props;
+  const getSubCategoryPosts = usePostsStore((state) => state.getSubCategoryPosts);
+  const subCategoriesPosts = usePostsStore((state) => state.subCategoriesPosts);
+  const userInfo = useUserStore((state) => state.userInfo);
+  const groups = useUserStore((state) => state.groups);
+  const [visiblecount, setVisiblecount] = useState(20);
+  const { manageCategories } = useCategoryStore();
+  const selectedSubCategory = manageCategories?.find(m => m?.category === BB_SIDENAV_CATEGORIES.Article)?.subCategory?.find(s => s?.path === subCategoryPrettyUrl);
+  const Selectedlabel = selectedSubCategory?.subCategory;
+  const articlePath = useMemo(() => getArticlePath(manageCategories), [manageCategories]);
+
+  const findGroupId = (name) => {
+    const filtered = groups?.find(obj => obj.name === name);
+    return filtered?.id;
+  };
+  useEffect(() => {
+    const subCategoryId = selectedSubCategory?.subCategoryId;
+    if (subCategoryId) {
+      const groupId = findGroupId(formatGroup(userInfo.addressTitle))?.toString();
+      getSubCategoryPosts(subCategoryId, groupId);
+    }
+  }, [])
+
+  const visibleArticles = subCategoriesPosts.slice(0, visiblecount);
+  const handleloadMore = () => {
+    setVisiblecount(prev => prev + 20);
+  }
+
+  return (
+    <>
+      <Box className={Styles["container"]}>
+        {Selectedlabel && (<>
+          <Box component="span" className={Styles["label-container"]}>
+            <Link href={`${location.origin}${articlePath}`}><span className={Styles["label"]} >Articles</span></Link>
+            <ChevronRightIcon className={Styles["icon"]} />
+            <Box component="span" className={Styles["selected-label"]} >{Selectedlabel}</Box>
+          </Box>
+          <Typography variant="h5" className={Styles["title"]}>{Selectedlabel}</Typography>
+        </>
+        )}
+        <Box>
+          {visibleArticles.map((item) => (
+            <Box key={`${item.id} - ${item.isUserFavorite}`} className={Styles["article-container"]}>
+              <Divider className={Styles["divider"]} />
+              <Grid container spacing={4} className={Styles["grid-container"]}>
+                <Grid item xs={12} md={9}>
+                  <Link href={`/posts/${item?.landingPagePrettyUrl}`}>
+                    <Typography className={Styles["article-title"]}>{item?.title}</Typography>
+                  </Link>
+                  <Typography className={Styles["article-teaser"]}>{item?.teaser}</Typography>
+                  <Box className={Styles["article-info"]}>
+                    {item?.authorDetails?.author && <Typography className={Styles["author"]}>By {item?.authorDetails?.author}</Typography>}
+                    {item?.authorDetails?.date && <Typography className={Styles["date"]}>{formatDate(item?.authorDetails?.date)}</Typography>}
+                    {item?.authorDetails?.readTime && <Typography className={Styles["line"]}> {item?.authorDetails?.readTime} </Typography>}
+                  </Box>
+                </Grid>
+                <Grid item xs={12} md={3}>
+                  <Box className={Styles["thumbnail"]}>
+                    <Link href={`/posts/${item?.landingPagePrettyUrl}`}>
+                      <Box className={Styles["image-hover-wrapper"]}>
+                        <Image
+                          src={item?.thumbnailId || ''}
+                          className={Styles["image"]}
+                          alt="articleImg"
+                          width={172}
+                          height={133}
+                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 244px"
+                          priority
+                          unoptimized={true}
+                        />
+                        <Box className={Styles["image-overlay"]} />
+                      </Box>
+                    </Link>
+                    <PostFavoriteIcon postId={item?.id} checkFavorite={item?.isUserFavorite} />
+                  </Box>
+                </Grid>
+              </Grid>
+            </Box>
+          ))}
+        </Box>
+        <Box className={Styles["loadmore-container"]}>
+          {visibleArticles.length >= 20 ? <Button className={Styles["loadmore-button"]} onClick={handleloadMore}>Show more</Button> : ""}
+        </Box>
+      </Box>
+    </>
+  )
+}
+export default ArticleCommon
+
+
+export interface Posts {
+  id: string | null;
+  title: string | null;
+  landingPagePrettyUrl: string | null;
+  thumbnailId: string | null;
+  teaser: string | null;
+  teaserTitle: string | null;
+  teaserButtonText: string | null;
+  enabledStaticDocument: boolean;
+  created: string;
+  updated: string;
+  sort: number;
+  displayCategories: DisplayCategories | null;
+  linkedInteriorSubCategoryId: string | null;
+  displayThumbnail: string;
+  isUserFavorite?: boolean;
+  thumbnailTag?: POST_THUMBNAIL_TAG;
+  thumbnailCustomTag?: string;
+  templateType?: string;
+  detailsLine1?: string;
+  detailsLine2?: string;
+  authorDetails?: authorDetailDto;
+}
+
+
+import { ApiCallStatus } from "@/services/interfaces";
+import usePostFavoriteStore from "@/store/marketing-center/post-favorite";
+import { Favorite, FavoriteBorder } from "@mui/icons-material";
+import { Box, Button } from "@mui/material";
+import { useEffect, useState } from "react";
+import Styles from "./PostfavoriteIcon.module.scss";
+
+interface Props {
+  postId: string;
+  checkFavorite: boolean;
+}
+
+const PostFavoriteIcon = ({ postId, checkFavorite }: Props) => {
+  const [isFavorited, setIsFavorited] = useState(checkFavorite);
+  const [isHovered, setIsHovered] = useState(false);
+  const { toggleFavoritePost, toggleStatus } = usePostFavoriteStore();
+
+  useEffect(() => {
+    if (toggleStatus[postId] === ApiCallStatus.SUCCESS) {
+      setIsFavorited((prev) => !prev);
+    }
+  }, [toggleStatus[postId], postId]);
+
+  const handleClick = async () => {
+    if (toggleStatus[postId] === ApiCallStatus.IN_PROGRESS) return;
+    try {
+      await toggleFavoritePost(postId);
+    } catch (error) {
+      console.error('Error toggling favorite:', error);
+    }
+  };
+
+  return (
+    <Box className={Styles.container}>
+      <Box className={`${Styles.background} ${isFavorited ? Styles.active : ""}`} />
+      <Button
+        className={Styles.heartButton}
+        onClick={handleClick}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        disabled={toggleStatus[postId] === ApiCallStatus.IN_PROGRESS}
+      >
+        {isFavorited || isHovered ? (
+          <Favorite className={`${Styles.heartIcon} ${isFavorited ? Styles.active : ""}`} />
+        ) : (
+          <FavoriteBorder className={Styles.heartIcon} />
+        )}
+      </Button>
+    </Box>
+  );
+};
+
+export default PostFavoriteIcon;
+
+
+ getSubCategoryPosts: async (subCategoryId: string, groupId: string) => {
+    const { lastQueries } = get();
+    const lastQuery = lastQueries.subCategoryPosts;
+    if (
+      lastQuery.subCategoryId === subCategoryId &&
+      lastQuery.groupId === groupId
+    ) {
+      return;
+    }
+    set({ loading: true, lastQueries: { ...lastQueries, subCategoryPosts: { subCategoryId, groupId } } });
+    try {
+      const posts = await postsService.getSubCategoryPosts(subCategoryId, groupId);
+      set({
+        subCategoriesPosts: posts
+      });
+    } catch (error) {
+      console.error(error);
+    } finally {
+      set({ loading: false });
+    }
+  },
+
+const getSubCategoryPosts = async (subCategoryId: string, groupId: string): Promise<Posts[]> => {
+    try {
+      const response = await axios.get<Response<Posts[]>>(`/marketingcenter/api/v1/public/homepage/subcategories/posts?subCategoryId=${subCategoryId}&groupId=${groupId ? groupId : 0}`);
+      return response.data.data;
+    } catch (error) {
+      throw error;
+    }
+  }
