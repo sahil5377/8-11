@@ -1,0 +1,327 @@
+Posts-Favorite Implementation 
+
+using Asp.Versioning;
+using Azure;
+using BBMC.API.MarketingCenter.Models.DTOs;
+using BBMC.API.MarketingCenter.Service.Contracts;
+using BBMC.CoreService.Authorization;
+using BBMC.CoreService.Context;
+using BBMC.CoreService.ExtensionMethods;
+using BBMC.CoreService.LogsActivity.Contracts;
+using BBMC.CoreService.LogsActivity.Enums;
+using BBMC.CoreService.Models;
+using BBMC.CoreService.Models.DTOs;
+using Microsoft.AspNetCore.Mvc;
+
+namespace BBMC.API.MarketingCenter.Controllers
+{
+    [ApiController]
+    [Route("api/v{version:apiVersion}/favorites")]
+    [ApiVersion("1.0")]
+    public class PostFavoriteController : BaseController
+    {
+        private readonly IPostFavoriteService _postFavoriteService;
+        private readonly ILogsActivitiesServices _logsActivitiesServices;
+        private readonly ILogger<PostFavoriteController> _logger;
+        private readonly SessionContext _sessionContext;
+
+        public PostFavoriteController(
+            IPostFavoriteService postFavoriteService,
+            ILogsActivitiesServices logsActivitiesServices,
+            ILogger<PostFavoriteController>? logger,
+            SessionContext sessionContext)
+        {
+            _postFavoriteService = postFavoriteService;
+            _logsActivitiesServices = logsActivitiesServices;
+            _logger = logger;
+            _sessionContext = sessionContext;
+        }
+        ///<summary>
+        ///Toggles the favorite status of a post for a user.
+        ///</summary>
+        ///<param name="request">PostFavoriteDto containing PostId and UserId.</param>
+        ///<returns>Returns status of the toggle operation.</returns>
+        [HttpPost("{PostId}/toggle")]
+        public async Task<IActionResult> TogglePostFavoriteAsync([FromRoute] string PostId)
+        {
+            try
+            {
+                ResponseDto<string> response = new();
+                int userId = Request.GetUserId();
+                PostFavoriteDto request = new()
+                {
+                    UserId = Request.GetUserId(),
+                    PostId = PostId
+                };
+                response.Data = await _postFavoriteService.TogglePostFavoriteAsync(request);
+                _logger.LogInformation($"Toggled favorite status for post {PostId} by user {userId}", ModuleService.PostFavorite);
+                response.Success = true;
+                return Ok(response);
+            }
+            catch(ArgumentException ex)
+            {
+                _logger.LogError(ex, "An error occurred while toggling favorite status");
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while toggling favorite status");
+                return StatusCode(500, new { message = "An error occurred while toggling favorite status", error = ex.Message });
+            }
+        }
+
+        [HttpGet]
+        [ProducesResponseType(200, Type = typeof(ResponseDto<List<PostFavoriteResponseDto>>))]
+        [ProducesResponseType(500, Type = typeof(ResponseDto<string>))]
+        [Authorization(Role.AnyRole)]
+        public async Task<IActionResult> GetAllFavorite([FromQuery] PostFavoriteListFilterDto filter)
+        {
+            try
+            {
+                ResponseDto<ResponsePaginationDto<List<PostFavoriteResponseDto>>> response = new();
+                _sessionContext.UserId = Request.GetUserId();
+                response.Data = await _postFavoriteService.GetAllPostFavoritesAsync(filter);
+                response.Success = true;
+                return Ok(response);
+            }
+            catch (ArgumentException ex) 
+            {
+                _logger.LogError(ex, "An error occurred while fetching favourites");
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while fetching favourites");
+                return StatusCode(500, new { message = "An error occurred while fetching favourites", error = ex.Message });
+
+            }
+        }
+
+        [HttpDelete]
+        [ProducesResponseType(200, Type = typeof(ResponseDto<string>))]
+        [ProducesResponseType(400, Type = typeof(ResponseDto<string>))]
+        [ProducesResponseType(500, Type = typeof(ResponseDto<string>))]
+        [Authorization(Role.AnyRole)]
+        public async Task<IActionResult> Delete(string id)
+        {
+            ResponseDto<string> response = new ResponseDto<string>();
+            try
+            {
+                int userId = Request.GetUserId();
+                await _postFavoriteService.DeletePostFavoriteAsync(id,userId);
+                response.Data = "Post deleted from favorites successfully";
+                response.Success = true;
+                return Ok(response);
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogError(ex, "An error occurred while deleting favourites");
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while deleting favourites");
+                return StatusCode(500, new { message = "An error occurred while deleting favourites", error = ex.Message });
+
+            }
+        }
+    }
+}
+
+Service
+
+ using AutoMapper;
+using BBMC.API.MarketingCenter.Models.DTOs;
+using BBMC.API.MarketingCenter.Repository.Contracts;
+using BBMC.API.MarketingCenter.Service.Contracts;
+using BBMC.CoreService.Models.DTOs;
+using BBMC.CoreService.Models.Entities;
+
+namespace BBMC.API.MarketingCenter.Service.Services
+{
+    /// <summary>
+    /// Service for handaling post favorite logic.
+    /// </summary>
+    public class PostFavoriteService : IPostFavoriteService
+    {
+        private readonly IPostFavoriteRepository _postFavoriteRepository;
+        private readonly IMapper _mapper;
+
+        public PostFavoriteService(IPostFavoriteRepository postFavoriteRepository, IMapper mapper)
+        {
+            _postFavoriteRepository = postFavoriteRepository;
+            _mapper = mapper;
+        }
+
+        public async Task<string> TogglePostFavoriteAsync(PostFavoriteDto request)
+        {
+            var favoritePost = await _postFavoriteRepository.GetPostFavoriteByUserAsync(request.PostId,request.UserId);
+
+            if (favoritePost == null)
+            {
+                var newFavorite = new FavoritePostsUser
+                {
+                    PostId = request.PostId,
+                    UserId = request.UserId,
+                    CreatedAt = DateTime.UtcNow
+                };
+                return await _postFavoriteRepository.InsertPostFavoriteAsync(newFavorite);
+            }
+            await _postFavoriteRepository.DeletePostFavoriteByUserAsync(request.PostId, request.UserId);
+            return favoritePost.Id;
+        }
+
+        
+        public async Task<ResponsePaginationDto<List<PostFavoriteResponseDto>>> GetAllPostFavoritesAsync(PostFavoriteListFilterDto filter)
+        {
+            var favoriteList = await _postFavoriteRepository.GetAllPostFavoriteAsync(filter);
+            var userFavoriteList = new ResponsePaginationDto<List<PostFavoriteResponseDto>>
+            {
+                Rows = _mapper.Map<List<PostFavoriteResponseDto>>(favoriteList.Rows),
+                TotalRows = favoriteList.TotalRows
+            };
+            return userFavoriteList;   
+        }
+
+        public async Task DeletePostFavoriteAsync(string id, int userId )
+        {
+            await _postFavoriteRepository.DeletePostFavoriteByUserAsync(id, userId);
+        }
+    }
+}
+
+
+Repository
+
+using BBMC.API.MarketingCenter.Models.DTOs;
+using BBMC.API.MarketingCenter.Repository.Contracts;
+using BBMC.CoreService.Context;
+using BBMC.CoreService.Models.Constants;
+using BBMC.CoreService.Models.Contracts;
+using BBMC.CoreService.Models.DTOs;
+using BBMC.CoreService.Models.Entities;
+using MongoDB.Bson;
+using MongoDB.Driver;
+
+namespace BBMC.API.MarketingCenter.Repository.Services
+{
+    /// <summary>
+    /// Repository for handling post favorite DB Operations
+    /// </summary>
+    public class PostFavoriteRepository : IPostFavoriteRepository
+    {
+        private readonly IMongoCollection<FavoritePostsUser> _favoritePosts;
+        private readonly SessionContext _sessionContext;
+
+
+        public PostFavoriteRepository(IMongoContext mongoClient, SessionContext sessionContext)
+        {
+            _favoritePosts = mongoClient.Database.GetCollection<FavoritePostsUser>(NoSqlCollectionNames.FavoritePost);
+            _sessionContext = sessionContext;
+        }
+
+        public async Task<string> InsertPostFavoriteAsync(FavoritePostsUser entity)
+        {
+            await _favoritePosts.InsertOneAsync(entity);
+            return entity?.Id ?? throw new Exception($"Error occurred while inserting record for Post Favorite");
+        }
+        public async Task DeletePostFavoriteByUserAsync(string postId, int userId)
+        {
+            if (string.IsNullOrEmpty(postId) || userId <= 0)
+            {
+                throw new ArgumentException("Invalid postId or userId.");
+            }
+
+            var result = await _favoritePosts.DeleteOneAsync(fav => fav.PostId == postId && fav.UserId == userId);
+            if (result.DeletedCount == 0)
+            {
+                throw new Exception("No matching favorite post found.");
+            }
+        }
+        public async Task<FavoritePostsUser?> GetPostFavoriteByUserAsync(string postId, int userId)
+        {
+            return await _favoritePosts.Find(fav => fav.PostId == postId && fav.UserId == userId).FirstOrDefaultAsync();
+        }
+
+        public async Task<ResponsePaginationDto<List<FavoritePostsUser>>> GetAllPostFavoriteAsync(PostFavoriteListFilterDto filter)
+        {
+            List<BsonDocument> pipeline = [
+                new BsonDocument("$match",new BsonDocument{
+                    {"user_id",_sessionContext.UserId }
+                }),
+                new BsonDocument("$lookup", new BsonDocument{
+                    { "from","posts" },
+                    { "localField", "post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new ("$unwind", "$post"),
+
+                ];
+            if (!string.IsNullOrEmpty(filter.Title))
+            {
+                pipeline.Add(new BsonDocument("$match", new BsonDocument
+                {
+                     {"post.title", new BsonDocument("$regex", filter.Title).Add("$options", "i")} // Case-insensitive regex search
+                }));
+            }
+            ResponsePaginationDto<List<FavoritePostsUser>> result = new();
+            List<BsonDocument> listPipeline = pipeline.Concat(new List<BsonDocument>
+            {
+                new BsonDocument("$project", new BsonDocument{
+                {"_id","$_id"},
+                {"post_id","$post_id" },
+                {"created_at","$created_at" },
+                {"post", new BsonDocument{
+                    {"title","$post.title" },
+                    {"pretty_url","$post.pretty_url" }
+            }}
+        }),
+            new BsonDocument("$skip", (filter.PageNumber - 1) * filter.PageSize),
+            new BsonDocument("$limit", filter.PageSize)
+        }).ToList();
+            result.Rows = await _favoritePosts.Aggregate<FavoritePostsUser>(listPipeline).ToListAsync();
+            List<BsonDocument> countPipeline = pipeline.Concat(new List<BsonDocument>
+            {
+                new("$group", new BsonDocument {
+                    { "_id", 1 },
+                { "total_count", new BsonDocument("$sum", 1) }
+            })
+        }).ToList();
+            var countResult = await _favoritePosts.Aggregate<BsonDocument>(countPipeline).FirstOrDefaultAsync();
+            result.TotalRows = countResult != null ? countResult.GetValue("total_count").AsInt32 : 0;
+            return result;
+        }
+
+        public List<BsonDocument> UpdatePipeline(List<BsonDocument> pipeline, bool frompost = false)
+        {
+            int projectDocIndex = pipeline.FindIndex(x => x.Names.Contains("$project"));
+            if (projectDocIndex == -1) return pipeline;
+            pipeline[projectDocIndex]["$project"].AsBsonDocument.Add("user_favorite_id", "$favorite._id");
+            pipeline.InsertRange(projectDocIndex, new List<BsonDocument>() {
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    {"from","favoriteposts_users" },
+                    {"localField",frompost ? "_id":"post_id" },
+                    { "foreignField", "post_id" },
+                    { "pipeline", new BsonArray
+                        {
+                            new BsonDocument("$match", new BsonDocument
+                            {
+                                { "$expr", new BsonDocument("$eq", new BsonArray { "$user_id", _sessionContext.UserId }) }
+                            })
+                        }
+                    },
+                    {"as","favorite" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$favorite" },
+                    { "preserveNullAndEmptyArrays", true }
+                })
+            });
+            return pipeline;
+        }
+    }
+}
+
