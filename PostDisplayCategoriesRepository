@@ -1,0 +1,2005 @@
+PostDisplayCategoriesRepository
+
+using BBMC.API.MarketingCenter.Models.DTOs;
+using BBMC.API.MarketingCenter.Models.Entities;
+using BBMC.API.MarketingCenter.Models.Response;
+using BBMC.API.MarketingCenter.Repository.Contracts;
+using BBMC.CoreService.Context;
+using BBMC.CoreService.Models.Constants;
+using BBMC.CoreService.Models.Contracts;
+using BBMC.CoreService.Models.DTOs;
+using BBMC.CoreService.Models.Entities;
+using Finbuckle.MultiTenant;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
+using MongoDB.Driver;
+using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
+
+namespace BBMC.API.MarketingCenter.Repository.Services
+{
+    /// <summary>
+    /// Repository for managing post display categories.
+    /// </summary>
+    public class PostDisplayCategoriesRepository
+        : IPostDisplayCategoriesRepository
+    {
+        private readonly IMongoCollection<PostDisplayCategory> _context;
+        private readonly IMongoCollection<Category> _categoryRepo;
+        private readonly IPostFavoriteRepository _postFavoriteRepository;
+        private readonly IMultiTenantContext<TenantConnectionsDto>? _multiTenantContext;
+        private readonly SessionContext _sessionContext;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PostDisplayCategoriesRepository"/> class.
+        /// </summary>
+        /// <param name="client">The MongoDB client.</param>
+        /// <param name="postFavoriteRepository">Repo instance of Post favorite operations.</param>
+        /// <param name="multiTenantContext">Instance of Current Tenant.</param>
+        public PostDisplayCategoriesRepository(
+            IMongoContext client,
+            IPostFavoriteRepository postFavoriteRepository,
+            IMultiTenantContextAccessor<TenantConnectionsDto> multiTenantContext,
+            SessionContext sessionContext)
+        {
+            _context = client.Database.GetCollection<PostDisplayCategory>(NoSqlCollectionNames.DisplayCategories);
+            _categoryRepo = client.Database.GetCollection<Category>(NoSqlCollectionNames.Categories);
+            _postFavoriteRepository = postFavoriteRepository;
+            _multiTenantContext = multiTenantContext.MultiTenantContext;
+            _sessionContext = sessionContext;
+        }
+
+        /// <summary>
+        /// Retrieves a list of post DTOs by the specified interior subcategory ID.
+        /// </summary>
+        /// <param name="interiorSubcategoryId">The ID of the interior subcategory to retrieve posts for.</param>
+        /// <returns>A list of post DTOs that belong to the specified interior subcategory.</returns>
+        public async Task<List<Post>> GetPostsByInteriorSubcategoryId(string interiorSubcategoryId)
+        {
+            var interiorSubcategoryIdObj = ObjectId.Parse(interiorSubcategoryId);
+            var pipeline = new List<BsonDocument>
+            {
+                new ("$match", new BsonDocument
+                {
+                    { "internal_subcategory_id", interiorSubcategoryIdObj },
+                    { "fourth_level_category_id", BsonNull.Value },
+                    { "fifth_level_category_id", BsonNull.Value },
+                    { "display", true },
+                    { "deleted_flag", false }
+                }),
+                new ("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new ("$unwind", "$post"),
+                new ("$match", new BsonDocument
+                {
+                    { "post.deleted_flag", false },
+                    { "post.display_item", 1 }
+                }),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "files" },
+                    { "let", new BsonDocument("teaser_thumbnail_id", "$post.teaser_thumbnail_id") },
+                    { "pipeline", new BsonArray
+                        {
+                            new BsonDocument("$match", new BsonDocument
+                            {
+                               { "$expr", new BsonDocument("$and", new BsonArray
+                                    {
+                                        new BsonDocument("$ne", new BsonArray { "$$teaser_thumbnail_id", BsonNull.Value }),
+                                        new BsonDocument("$ne", new BsonArray { "$$teaser_thumbnail_id", "" }),
+
+                                        new BsonDocument("$eq", new BsonArray
+                                        {
+                                            "$_id",
+                                            new BsonDocument("$convert", new BsonDocument
+                                            {
+                                                { "input", "$$teaser_thumbnail_id" },
+                                                { "to", "objectId" },
+                                                { "onError", BsonNull.Value },
+                                                { "onNull",  BsonNull.Value }
+                                            })
+                                        })
+                                    })
+                                }
+                            })
+                        }
+                    },
+                    { "as", "file" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$file" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new ("$project", new BsonDocument
+                {
+                    { "_id", "$post._id" },
+                    { "title", "$post.title" },
+                    { "pretty_url", "$post.pretty_url" },
+                    { "teaser_thumbnail_id", "$file.url" },
+                    { "teaser", "$post.Teaser" },
+                    { "teaser_title", "$post.teaser_title" },
+                    { "teaser_button_text", "$post.teaser_button_text" },
+                    { "enabled_static_document", "$post.enabled_static_document" },
+                    { "created", "$post.created" },
+                    { "updated", "$post.updated" },
+                    { "sort", "$sort" },
+                    { "linkedInteriorSubCategoryId", interiorSubcategoryIdObj },
+                    { "displayCategories", new BsonDocument
+                        {
+                            { "category", new BsonDocument
+                                {
+                                    { "_id", "$category._id" },
+                                    { "name", "$category.name" }
+                                }
+                            },
+                            { "subcategory", new BsonDocument
+                                {
+                                    { "_id", "$subcategory._id" },
+                                    { "name", "$subcategory.name" }
+                                }
+                            },
+                            { "internal_subcategory", new BsonDocument
+                                {
+                                    { "_id", "$internal_subcategory._id" },
+                                    { "name", "$internal_subcategory.name" }
+                                }
+                            },
+                            { "_id", "$_id" }
+                        }
+                    }
+                }),
+                new ("$sort", new BsonDocument
+                {
+                    { "sort", 1 },
+                    { "updated", -1 }
+                })
+            };
+
+            if (_multiTenantContext?.TenantInfo?.Id?.ToLower() == ConstCompany.BB_ID) pipeline = _postFavoriteRepository.UpdatePipeline(pipeline);
+            var postsQuery = await _context.AggregateAsync<Post>(pipeline);
+            var posts = await postsQuery.ToListAsync();
+
+            return posts;
+        }
+
+        public async Task<List<CategoryPost>> GetPostsByCategoryLevelAsync(CategoryPostsFilterDto filter)
+        {
+            if (string.IsNullOrEmpty(filter.CategoryId))
+                return new List<CategoryPost>();
+
+            var pipeline = new List<BsonDocument>();
+            string groupBy = "category";
+
+            pipeline.Add(new BsonDocument("$match", new BsonDocument("_id", ObjectId.Parse(filter.CategoryId))));
+
+            if (!string.IsNullOrEmpty(filter.SubCategoryId))
+            {
+                pipeline.AddRange(new[]
+                {
+                    new BsonDocument("$lookup", new BsonDocument
+                    {
+                        { "from", "subcategories" },
+                        { "let", new BsonDocument("category_id", "$_id") },
+                        { "pipeline", new BsonArray
+                            {
+                                new BsonDocument("$match", new BsonDocument
+                                {
+                                    { "$expr", new BsonDocument("$and", new BsonArray {
+                                        new BsonDocument("$eq", new BsonArray { "$category_id", "$$category_id" }),
+                                        new BsonDocument("$eq", new BsonArray { "$_id", ObjectId.Parse(filter.SubCategoryId) }),
+                                        new BsonDocument("$eq", new BsonArray { "$deleted_flag", false })
+                                    })}
+                                })
+                            }
+                        },
+                        { "as", "subcategory" }
+                    }),
+                    new BsonDocument("$unwind", "$subcategory")
+                }); 
+
+                if (!string.IsNullOrEmpty(filter.InteriorSubCategoryId))
+                {
+                    pipeline.AddRange(new[]
+                    {
+                        new BsonDocument("$lookup", new BsonDocument
+                        {
+                            { "from", "interiorsubcategories" },
+                            { "let", new BsonDocument("subcategory_id", "$subcategory._id") },
+                            { "pipeline", new BsonArray
+                                {
+                                    new BsonDocument("$match", new BsonDocument
+                                    {
+                                        { "$expr", new BsonDocument("$and", new BsonArray {
+                                            new BsonDocument("$eq", new BsonArray { "$subcategory_id", "$$subcategory_id" }),
+                                            new BsonDocument("$eq", new BsonArray { "$_id", ObjectId.Parse(filter.InteriorSubCategoryId) }),
+                                            new BsonDocument("$eq", new BsonArray { "$deleted_flag", false })
+                                        })}
+                                    })
+                                }
+                            },
+                            { "as", "internal_subcategory" }
+                        }),
+                        new BsonDocument("$unwind", "$internal_subcategory")
+                    });
+
+                    pipeline.AddRange(new[]
+                    {
+                        new BsonDocument("$lookup", new BsonDocument
+                        {
+                            { "from", "postsdisplaycategories" },
+                            { "let", new BsonDocument
+                                {
+                                    { "category_id", "$_id" },
+                                    { "subcategory_id", "$subcategory._id" },
+                                    { "internal_subcategory_id", "$internal_subcategory._id" }
+                                }
+                            },
+                            { "pipeline", new BsonArray
+                                {
+                                    new BsonDocument("$match", new BsonDocument
+                                    {
+                                        { "$expr", new BsonDocument("$and", new BsonArray {
+                                            new BsonDocument("$eq", new BsonArray { "$category_id", "$$category_id" }),
+                                            new BsonDocument("$eq", new BsonArray { "$subcategory_id", "$$subcategory_id" }),
+                                            new BsonDocument("$eq", new BsonArray { "$internal_subcategory_id", "$$internal_subcategory_id" }),
+                                            new BsonDocument("$eq", new BsonArray { "$deleted_flag", false })
+                                        })}
+                                    })
+                                }
+                            },
+                            { "as", "postdisplaycategory" }
+                        })
+                    });
+                    groupBy = "internal_subcategory";
+                }
+                else
+                {
+                    if (filter.DisableChildLevel)
+                    {
+                        pipeline.AddRange(new[]
+                        {
+                            new BsonDocument("$lookup", new BsonDocument
+                            {
+                                { "from", "postsdisplaycategories" },
+                                { "let", new BsonDocument
+                                    {
+                                        { "category_id", "$_id" },
+                                        { "subcategory_id", "$subcategory._id" }
+                                    }
+                                },
+                                { "pipeline", new BsonArray
+                                    {
+                                        new BsonDocument("$match", new BsonDocument
+                                        {
+                                            { "$expr", new BsonDocument("$and", new BsonArray {
+                                                new BsonDocument("$eq", new BsonArray { "$category_id", "$$category_id" }),
+                                                new BsonDocument("$eq", new BsonArray { "$subcategory_id", "$$subcategory_id" }),
+                                                new BsonDocument("$eq", new BsonArray { "$internal_subcategory_id", BsonNull.Value }),
+                                                new BsonDocument("$eq", new BsonArray { "$deleted_flag", false })
+                                            })}
+                                        })
+                                    }
+                                },
+                                { "as", "postdisplaycategory" }
+                            })
+                        });
+                        groupBy = "subcategory";
+                    }
+                    else
+                    {
+                        pipeline.AddRange(new[]
+                        {
+                            new BsonDocument("$lookup", new BsonDocument
+                            {
+                                { "from", "interiorsubcategories" },
+                                { "let", new BsonDocument("subcategory_id", "$subcategory._id") },
+                                { "pipeline", new BsonArray
+                                    {
+                                        new BsonDocument("$match", new BsonDocument
+                                        {
+                                            { "$expr", new BsonDocument("$and", new BsonArray {
+                                                new BsonDocument("$eq", new BsonArray { "$subcategory_id", "$$subcategory_id" }),
+                                                new BsonDocument("$eq", new BsonArray { "$deleted_flag", false })
+                                            })}
+                                        })
+                                    }
+                                },
+                                { "as", "internal_subcategory" }
+                            }),
+                            new BsonDocument("$unwind", "$internal_subcategory")
+                        });
+
+                        pipeline.AddRange(new[]
+                        {
+                            new BsonDocument("$lookup", new BsonDocument
+                            {
+                                { "from", "postsdisplaycategories" },
+                                { "let", new BsonDocument
+                                    {
+                                        { "category_id", "$_id" },
+                                        { "subcategory_id", "$subcategory._id" },
+                                        { "internal_subcategory_id", "$internal_subcategory._id" }
+                                    }
+                                },
+                                { "pipeline", new BsonArray
+                                    {
+                                        new BsonDocument("$match", new BsonDocument
+                                        {
+                                            { "$expr", new BsonDocument("$and", new BsonArray {
+                                                new BsonDocument("$eq", new BsonArray { "$category_id", "$$category_id" }),
+                                                new BsonDocument("$eq", new BsonArray { "$subcategory_id", "$$subcategory_id" }),
+                                                new BsonDocument("$eq", new BsonArray { "$internal_subcategory_id", "$$internal_subcategory_id" }),
+                                                new BsonDocument("$eq", new BsonArray { "$deleted_flag", false })
+                                            })}
+                                        })
+                                    }
+                                },
+                                { "as", "postdisplaycategory" }
+                            })                            
+                        });
+                        groupBy = "internal_subcategory";
+                    }
+                }
+            }
+            else
+            {
+                pipeline.AddRange(new[]
+                {
+                    new BsonDocument("$lookup", new BsonDocument
+                    {
+                        { "from", "subcategories" },
+                        { "let", new BsonDocument("category_id", "$_id") },
+                        { "pipeline", new BsonArray
+                            {
+                                new BsonDocument("$match", new BsonDocument
+                                {
+                                    { "$expr", new BsonDocument("$and", new BsonArray {
+                                        new BsonDocument("$eq", new BsonArray { "$category_id", "$$category_id" }),
+                                        new BsonDocument("$eq", new BsonArray { "$deleted_flag", false })
+                                    })}
+                                })
+                            }
+                        },
+                        { "as", "subcategory" }
+                    }),
+                    new BsonDocument("$unwind", "$subcategory"),
+                    new BsonDocument("$lookup", new BsonDocument
+                    {
+                        { "from", "postsdisplaycategories" },
+                        { "let", new BsonDocument
+                            {
+                                { "category_id", "$_id" },
+                                { "subcategory_id", "$subcategory._id" }
+                            }
+                        },
+                        { "pipeline", new BsonArray
+                            {
+                                new BsonDocument("$match", new BsonDocument
+                                {
+                                    { "$expr", new BsonDocument("$and", new BsonArray {
+                                        new BsonDocument("$eq", new BsonArray { "$category_id", "$$category_id" }),
+                                        new BsonDocument("$eq", new BsonArray { "$subcategory_id", "$$subcategory_id" }),
+                                        new BsonDocument("$eq", new BsonArray { "$deleted_flag", false })
+                                    })}
+                                }),
+                            }
+                        },
+                        { "as", "postdisplaycategory" }
+                    })
+                });
+                groupBy = "subcategory";
+            }
+            
+            pipeline.AddRange(
+            [
+                new BsonDocument("$unwind", "$postdisplaycategory"),
+                new BsonDocument("$group", new BsonDocument
+                {
+                    { "_id", new BsonDocument
+                        {
+                            { "category_id", $"${groupBy}._id"},
+                            { "post_id", "$postdisplaycategory.post_id" }
+                        }
+                    },
+                    { "doc", new BsonDocument("$first", "$$ROOT") }
+                }),
+                new BsonDocument("$replaceRoot", new BsonDocument("newRoot", "$doc")),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "postdisplaycategory.post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new BsonDocument("$unwind", "$post"),
+                new BsonDocument("$match", new BsonDocument
+                {
+                    { "post.deleted_flag", false },
+                    { "post.display_item", 1 }
+                }),
+                new BsonDocument("$sort", new BsonDocument
+                {
+                    { "postdisplaycategory.is_featured_item", -1 },
+                    { "postdisplaycategory.sort", 1 },
+                    { "post.updated", -1 }
+                }),
+                new BsonDocument("$group", new BsonDocument
+                {
+                    { "_id", $"${groupBy}._id" },
+                    { "name", new BsonDocument("$first", $"${groupBy}.name") },
+                    { "count", new BsonDocument("$sum", 1) },
+                    { "posts", new BsonDocument("$push", "$$ROOT") }
+                }),               
+                new BsonDocument("$addFields", new BsonDocument{
+                    {"posts",new BsonDocument("$cond", new BsonArray
+                        {
+                            filter.IncludeAll,
+                            "$posts",
+                            new BsonDocument("$slice", new BsonArray { "$posts", 5 })
+                        }) 
+                    }
+                }),
+                new BsonDocument("$unwind", "$posts"),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "posts.post._id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new BsonDocument("$unwind", "$post"),                
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "postsgeneral" },
+                    { "localField", "post._id" },
+                    { "foreignField", "post_id" },
+                    { "as", "posts_general" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$posts_general" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "postsdisplay" },
+                    { "localField", "post._id" },
+                    { "foreignField", "post_id" },
+                    { "as", "posts_display" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$posts_display" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "brochuretemplates" },
+                    { "let", new BsonDocument
+                        {
+                            { "brochure_template55x8QR_id", "$posts_general.brochure_template55x8QR_id" },
+                            { "brochure_template55x8_id", "$posts_general.brochure_template55x8_id" },
+                            { "brochure_template425x6_id", "$posts_general.brochure_template425x6_id" },
+                            { "brochure_template_id", "$posts_general.brochure_template_id" }
+                        }
+                    },
+                    { "pipeline", new BsonArray
+                        {
+                            new BsonDocument("$match", new BsonDocument
+                            {
+                                { "$expr", new BsonDocument("$or", new BsonArray
+                                    {
+                                        new BsonDocument("$eq", new BsonArray { "$_id", "$$brochure_template55x8QR_id" }),
+                                        new BsonDocument("$eq", new BsonArray { "$_id", "$$brochure_template55x8_id" }),
+                                        new BsonDocument("$eq", new BsonArray { "$_id", "$$brochure_template425x6_id" }),
+                                        new BsonDocument("$eq", new BsonArray { "$_id", "$$brochure_template_id" })
+                                    })
+                                }
+                            }),
+                            new BsonDocument("$limit", 1)
+                        }
+                    },
+                    { "as", "brochuretemplate" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$brochuretemplate" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "brochuretemplate.post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "template_post" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$template_post" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "files" },
+                    { "let", new BsonDocument
+                        {
+                            { "teaser_thumbnail_id", "$post.teaser_thumbnail_id" },
+                            { "template_post_teaser_thumbnail_id", "$template_post.teaser_thumbnail_id" }
+                        }
+                    },
+                    { "pipeline", new BsonArray
+                        {
+                            new BsonDocument("$match", new BsonDocument
+                            {
+                                { "$expr", new BsonDocument("$or", new BsonArray
+                                    {
+                                        new BsonDocument("$eq", new BsonArray { "$_id", new BsonDocument("$toObjectId", "$$teaser_thumbnail_id") }),
+                                        new BsonDocument("$eq", new BsonArray { "$_id", new BsonDocument("$toObjectId", "$$template_post_teaser_thumbnail_id") })
+                                    })
+                                }
+                            }),
+                            new BsonDocument("$addFields", new BsonDocument("priority", new BsonDocument("$cond", new BsonArray
+                            {
+                                new BsonDocument("$eq", new BsonArray { "$_id", new BsonDocument("$toObjectId", "$$teaser_thumbnail_id") }),
+                                1,
+                                2
+                            }))),
+                            new BsonDocument("$sort", new BsonDocument("priority", 1)),
+                            new BsonDocument("$limit", 1)
+                        }
+                    },
+                    { "as", "file" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$file" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                 new BsonDocument("$lookup", new BsonDocument
+                 {
+                    {"from","favoriteposts_users" },
+                    {"localField", "post._id" },
+                    { "foreignField", "post_id" },
+                    { "pipeline", new BsonArray
+                        {
+                            new BsonDocument("$match", new BsonDocument
+                            {
+                                { "$expr", new BsonDocument("$eq", new BsonArray { "$user_id", _sessionContext.UserId }) }
+                            })
+                        }
+                    },
+                    {"as","favorite" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$favorite" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new BsonDocument("$group", new BsonDocument
+                {
+                    { "_id", "$_id" },
+                    { "name", new BsonDocument("$first", "$name") },
+                    { "count", new BsonDocument("$first", "$count") },
+                    { "posts", new BsonDocument("$push",  new BsonDocument
+                        {
+                            { "_id", "$post._id" },
+                            { "title", "$post.title" },
+                            { "pretty_url", "$post.pretty_url" },
+                            { "teaser_thumbnail_id", "$file.url" },
+                            { "teaser", "$post.Teaser" },
+                            { "teaser_title", "$post.teaser_title" },
+                            { "teaser_button_text", "$post.teaser_button_text" },
+                            { "enabled_static_document", "$post.enabled_static_document" },
+                            { "created", "$post.created" },
+                            { "updated", "$post.updated" },
+                            { "displayCategories", new BsonDocument
+                                {
+                                    { "subcategory", new BsonDocument
+                                        {
+                                            { "_id", "$subcategory._id" },
+                                            { "name", "$subcategory.name" }
+                                        }
+                                    },
+                                    { "internal_subcategory", new BsonDocument
+                                        {
+                                            { "_id", "$internal_subcategory._id" },
+                                            { "name", "$internal_subcategory.name" }
+                                        }
+                                    }
+                                }
+                            },
+                            { "general", "$posts_general" },
+                            { "display", "$posts_display" },
+                            { "user_favorite_id", "$favorite._id" }
+                        }
+                    )}
+                }),
+                new BsonDocument("$project", new BsonDocument
+                {
+                    { "_id", 1 },
+                    { "name", 1 },
+                    { "count", 1 },
+                    { "posts", 1}
+                })
+            ]);
+
+            return await _categoryRepo.Aggregate<CategoryPost>(pipeline).ToListAsync();
+        }
+
+        public async Task<Post> GetHighlightedPostsByCategoryAsync(string categoryId)
+        {
+            var pipeline = new List<BsonDocument>
+            {
+                new("$match", new BsonDocument
+                {
+                    {"category_id", ObjectId.Parse(categoryId)},
+                    {"deleted_flag", false },
+                    {"display", true },
+                    {"fourth_level_category_id", BsonNull.Value },
+                    {"fifth_level_category_id", BsonNull.Value }
+                }),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "postsdisplay" },
+                    { "let", new BsonDocument("post_id", "$post_id") },
+                    { "pipeline", new BsonArray
+                    {
+                        new BsonDocument("$match", new BsonDocument
+                        {
+                            { "$expr", new BsonDocument("$and", new BsonArray
+                                {
+                                    new BsonDocument("$eq", new BsonArray { "$post_id", "$$post_id" }),
+                                    new BsonDocument("$eq", new BsonArray { "$highlighted_item", true })
+                                })
+                            }
+                         }),
+                        new BsonDocument("$sort", new BsonDocument("updated", -1))
+                        }
+                    },
+                    { "as", "posts_display" }
+                }),
+
+                new("$unwind", "$posts_display"),
+                new("$lookup", new BsonDocument
+                {
+                    {"from","posts" },
+                    {"localField", "post_id" },
+                    {"foreignField", "_id" },
+                    {"as","post" }
+                }),
+                new("$unwind","$post"),
+               new BsonDocument("$lookup", new BsonDocument
+               {
+                    { "from", "files" },
+                    { "let", new BsonDocument("teaser_thumbnail_id", "$post.teaser_thumbnail_id") },
+                    { "pipeline", new BsonArray
+                    {
+                        new BsonDocument("$match", new BsonDocument
+                        {
+                            { "$expr", new BsonDocument("$eq", new BsonArray { "$_id", new BsonDocument("$toObjectId", "$$teaser_thumbnail_id") }) }
+                        })
+                    }
+               },
+               { "as", "file" }
+               }),
+                new("$unwind", new BsonDocument
+                {
+                    { "path", "$file" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new("$project", new BsonDocument
+                {
+                    { "_id", "$post._id" },
+                    { "title", "$post.title" },
+                    { "pretty_url", "$post.pretty_url" },
+                    { "teaser_thumbnail_id", "$file.url" },
+                    { "created", "$post.created" },
+                    { "teaser", "$post.Teaser" },
+                    { "updated", "$post.updated" },
+                    { "display", "$posts_display" },
+                    { "sort", "$sort" }
+                }),
+                new("$sort", new BsonDocument("updated", -1)),
+                new("$limit", 1),
+            };
+            if (_multiTenantContext?.TenantInfo?.Id?.ToLower() == ConstCompany.BB_ID)
+            {
+                pipeline = _postFavoriteRepository.UpdatePipeline(pipeline);
+            }
+            return await _context.Aggregate<Post>(pipeline).FirstOrDefaultAsync();
+        }
+        /// <summary>
+        /// Retrieves a list of post DTOs by the specified interior subcategory ID.
+        /// </summary>
+        /// <param name="interiorSubcategoryId">The ID of the interior subcategory to retrieve posts for.</param>
+        /// <returns>A list of post DTOs that belong to the specified interior subcategory.</returns>
+        public async Task<List<ResultPost>> GetPostsGroupedByInteriorSubcategory(string interiorSubcategoryId)
+        {
+            var interiorSubCategoryIdObj = ObjectId.Parse(interiorSubcategoryId);
+            var pipeline = new List<BsonDocument>
+            {
+                new BsonDocument("$match", new BsonDocument
+                {
+                    { "internal_subcategory_id", interiorSubCategoryIdObj },
+                    { "fourth_level_category_id", BsonNull.Value },
+                    { "fifth_level_category_id", BsonNull.Value },
+                    { "display", true }
+                }),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new BsonDocument("$unwind", "$post"),
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "post.teaser_thumbnail_id", new BsonDocument("$toObjectId", "$post.teaser_thumbnail_id") }
+                }),
+                new BsonDocument ("$lookup", new BsonDocument
+                {
+                    { "from", "files" },
+                    { "localField", "post.teaser_thumbnail_id" },
+                    { "foreignField", "_id" },
+                    { "as", "files" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$files" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "post.teaser_thumbnail_id", "$files.url" }
+                }),
+                new BsonDocument("$match", new BsonDocument
+                {
+                    { "post.deleted_flag", false },
+                    { "post.display_item", 1 }
+                }),
+                new BsonDocument("$facet", new BsonDocument
+                {
+                    { "GroupedByCategory", new BsonArray
+                        {
+                            new BsonDocument("$match", new BsonDocument("post.category", new BsonDocument("$ne", BsonNull.Value))),
+                            new BsonDocument("$group", new BsonDocument
+                            {
+                                { "_id", "$post.category" },
+                                { "PostsList", new BsonDocument("$push", new BsonDocument
+                                    {
+                                        { "_id", "$post._id" },
+                                        { "title", "$post.title" },
+                                        { "original_title", "$post.original_title" },
+                                        { "modified_title", "$post.modified_title" },
+                                        { "pretty_url", "$post.pretty_url" },
+                                        { "teaser_thumbnail_id", "$post.category_image" },
+                                        { "teaser", "$post.teaser" },
+                                        { "teaser_title", "$post.teaser_title" },
+                                        { "teaser_button_text", "$post.teaser_button_text" },
+                                        { "enabled_static_document", "$post.enabled_static_document" },
+                                        { "created", "$post.created" },
+                                        { "updated", "$post.updated" },
+                                        { "size", "$post.size" },
+                                        { "is_qr", "$post.isQr" },
+                                        { "category", "$post.category" },
+                                    })
+                                },
+                                { "FirstPost", new BsonDocument("$first", "$post") }
+                            }),
+                            new BsonDocument("$addFields", new BsonDocument
+                            {
+                                { "PostsList", new BsonDocument("$reduce", new BsonDocument
+                                    {
+                                        { "input", "$PostsList" },
+                                        { "initialValue", new BsonArray() },
+                                        { "in", new BsonDocument("$cond", new BsonArray
+                                            {
+                                                new BsonDocument("$in", new BsonArray { "$$this.pretty_url", "$$value.pretty_url" }),
+                                                "$$value",
+                                                new BsonDocument("$concatArrays", new BsonArray { "$$value", new BsonArray { "$$this" } })
+                                            })
+                                        }
+                                    })
+                                }
+                            }),
+                            new BsonDocument("$project", new BsonDocument
+                            {
+                                { "_id", "$post._id" },
+                                { "title", "$FirstPost.category" },
+                                { "pretty_url", "$FirstPost.pretty_url" },
+                                { "teaser_thumbnail_id", "$FirstPost.teaser_thumbnail_id" },
+                                { "teaser", "$FirstPost.teaser" },
+                                { "teaser_title", "$FirstPost.teaser_title" },
+                                { "teaser_button_text", "$FirstPost.teaser_button_text" },
+                                { "enabled_static_document", "$FirstPost.enabled_static_document" },
+                                { "created", "$FirstPost.created" },
+                                { "updated", "$FirstPost.updated" },
+                                { "sort", "$FirstPost.sort" },
+                                { "PostsList", "$PostsList" }
+                            })
+                        }
+                    },
+                    { "NoCategory", new BsonArray
+                        {
+                            new BsonDocument("$match", new BsonDocument("post.category", BsonNull.Value)),
+                            new BsonDocument("$project", new BsonDocument
+                            {
+                                { "_id", "$post._id" },
+                                { "title", "$post.title" },
+                                { "original_title", "$post.original_title" },
+                                { "modified_title", "$post.modified_title" },
+                                { "pretty_url", "$post.pretty_url" },
+                                { "teaser_thumbnail_id", "$post.teaser_thumbnail_id" },
+                                { "teaser", "$post.teaser" },
+                                { "teaser_title", "$post.teaser_title" },
+                                { "teaser_button_text", "$post.teaser_button_text" },
+                                { "enabled_static_document", "$post.enabled_static_document" },
+                                { "created", "$post.created" },
+                                { "updated", "$post.updated" },
+                                { "size", "$post.size" },
+                                { "is_qr", "$post.isQr" },
+                                { "category", "$post.category" },
+                                { "category_image", "$post.category_image" },
+                                { "sort", "$sort" }
+                            })
+                        }
+                    }
+                }),
+                new BsonDocument("$project", new BsonDocument
+                {
+                    { "finalResults", new BsonDocument("$setUnion", new BsonArray { "$GroupedByCategory", "$NoCategory" }) }
+                }),
+                new BsonDocument("$unwind", "$finalResults"),
+                new BsonDocument("$replaceRoot", new BsonDocument("newRoot", "$finalResults")),
+                new ("$sort", new BsonDocument
+                {
+                    { "sort", 1 },
+                    { "updated", -1 }
+                })
+            };
+
+            var postsQuery = await _context.AggregateAsync<BsonDocument>(pipeline);
+            var postsResult = await postsQuery.ToListAsync();
+
+            List<ResultPost> result = postsResult.Select(doc => BsonSerializer.Deserialize<ResultPost>(doc)).ToList();
+
+            return result;
+        }
+
+
+
+        /// <summary>
+        /// Retrieves a list of post DTOs by the specified interior subcategory ID.
+        /// </summary>
+        /// <param name="interiorSubcategoryId">The ID of the interior subcategory to retrieve posts for.</param>
+        /// <returns>A list of post DTOs that belong to the specified interior subcategory.</returns>
+        public async Task<List<ResultPost>> GetPostsByInteriorSubcategoryIGrouped(string interiorSubcategoryId)
+        {
+
+            var interiorSubCategoryIdObj = ObjectId.Parse(interiorSubcategoryId);
+            var pipeline = new List<BsonDocument>
+            {
+                new BsonDocument("$match", new BsonDocument
+                {
+                    { "internal_subcategory_id", interiorSubCategoryIdObj },
+                    { "fourth_level_category_id", BsonNull.Value },
+                    { "fifth_level_category_id", BsonNull.Value },
+                    { "display", true }
+                }),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new BsonDocument("$unwind", "$post"),
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "post.teaser_thumbnail_id", new BsonDocument("$toObjectId", "$post.teaser_thumbnail_id") }
+                }),
+                new BsonDocument ("$lookup", new BsonDocument
+                {
+                    { "from", "files" },
+                    { "localField", "post.teaser_thumbnail_id" },
+                    { "foreignField", "_id" },
+                    { "as", "files" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$files" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "post.teaser_thumbnail_id", "$files.url" }
+                }),
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "post.size", new BsonDocument("$regexFind", new BsonDocument
+                        {
+                            { "input", "$post.pretty_url" },
+                            { "regex", @"(\d+(\.\d+)?x\d+(\.\d+)?)$|(\d+_\d+_\d+_\d+)$|(\d+_\d+_\d+)$" }//supporting "prettyUrl": "_4.25x6" or "_4_25_6",
+                        })
+                    }
+                }),
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "post.size", new BsonDocument("$cond", new BsonArray
+                        {
+                            new BsonDocument("$eq", new BsonArray
+                            {
+                                new BsonDocument("$type", "$post.size"),
+                                "missing"
+                            }),
+                            "",
+                            new BsonDocument("$cond", new BsonArray
+                            {
+                                new BsonDocument("$regexMatch", new BsonDocument
+                                {
+                                    { "input", "$post.pretty_url" },
+                                    { "regex", @"(\d+_\d+_\d+_\d+)$" }
+                                }),
+                                new BsonDocument("$concat", new BsonArray
+                                {
+                                    new BsonDocument("$toString", new BsonDocument("$arrayElemAt", new BsonArray { new BsonDocument("$split", new BsonArray { "$post.size.match", "_" }), 0 })),
+                                    ".",
+                                    new BsonDocument("$toString", new BsonDocument("$arrayElemAt", new BsonArray { new BsonDocument("$split", new BsonArray { "$post.size.match", "_" }), 1 })),
+                                    "x",
+                                    new BsonDocument("$toString", new BsonDocument("$arrayElemAt", new BsonArray { new BsonDocument("$split", new BsonArray { "$post.size.match", "_" }), 2 })),
+                                    ".",
+                                    new BsonDocument("$toString", new BsonDocument("$arrayElemAt", new BsonArray { new BsonDocument("$split", new BsonArray { "$post.size.match", "_" }), 3 }))
+                                }),
+                                new BsonDocument("$cond", new BsonArray
+                                {
+                                    new BsonDocument("$regexMatch", new BsonDocument
+                                    {
+                                        { "input", "$post.pretty_url" },
+                                        { "regex", @"(\d+_\d+_\d+)$" }
+                                    }),
+                                    new BsonDocument("$concat", new BsonArray
+                                    {
+                                        new BsonDocument("$toString", new BsonDocument("$arrayElemAt", new BsonArray { new BsonDocument("$split", new BsonArray { "$post.size.match", "_" }), 0 })),
+                                        ".",
+                                        new BsonDocument("$toString", new BsonDocument("$arrayElemAt", new BsonArray { new BsonDocument("$split", new BsonArray { "$post.size.match", "_" }), 1 })),
+                                        "x",
+                                        new BsonDocument("$toString", new BsonDocument("$arrayElemAt", new BsonArray { new BsonDocument("$split", new BsonArray { "$post.size.match", "_" }), 2 }))
+                                    }),
+                                    new BsonDocument("$replaceAll", new BsonDocument
+                                    {
+                                        { "input", "$post.size.match" },
+                                        { "find", "_" },
+                                        { "replacement", "." }
+                                    })
+                                })
+                            })
+                        })
+                    }
+                }),
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "post.original_title", "$post.title" },
+                    { "post.modified_title", new BsonDocument("$let", new BsonDocument
+                        {
+                            { "vars", new BsonDocument
+                                {
+                                    { "matchResult", new BsonDocument("$regexFind", new BsonDocument
+                                        {
+                                            { "input", "$post.title" },
+                                            { "regex", @"(\d+(\.\d+)?\s*x\s*\d+(\.\d+)?)$|(\d+_\d+_\d+_\d+)$|(\d+_\d+_\d+)$" }
+                                        })
+                                    }
+                                }
+                            },
+                            { "in", new BsonDocument("$cond", new BsonArray
+                                {
+                                    new BsonDocument("$and", new BsonArray
+                                    {
+                                        new BsonDocument("$ne", new BsonArray { "$$matchResult", BsonNull.Value }),  // Ensure a match is found
+                                        new BsonDocument("$ne", new BsonArray { "$$matchResult.match", BsonNull.Value })  // Ensure match is not null
+                                    }),
+                                    new BsonDocument("$substrCP", new BsonArray
+                                    {
+                                        "$post.title",
+                                        0,
+                                        new BsonDocument("$indexOfBytes", new BsonArray
+                                        {
+                                            "$post.title",
+                                            "$$matchResult.match"
+                                        })
+                                    }),
+                                    "$post.title"  // Use original title if no match
+                                })
+                            }
+                        })
+                    }
+                })
+                ,
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "post.title", new BsonDocument("$cond", new BsonArray
+                        {
+                            new BsonDocument("$gte", new BsonArray
+                            {
+                                new BsonDocument("$indexOfBytes", new BsonArray { "$post.title", "Qr" }),
+                                0
+                            }),
+                            new BsonDocument("$substrCP", new BsonArray
+                            {
+                                "$post.title",
+                                0,
+                                new BsonDocument("$indexOfBytes", new BsonArray { "$post.title", "Qr" })
+                            }),
+                            new BsonDocument("$cond", new BsonArray
+                            {
+                                new BsonDocument("$gte", new BsonArray
+                                {
+                                    new BsonDocument("$indexOfBytes", new BsonArray { "$post.title", "Postcard" }),
+                                    0
+                                }),
+                                new BsonDocument("$substrCP", new BsonArray
+                                {
+                                    "$post.title",
+                                    0,
+                                    new BsonDocument("$indexOfBytes", new BsonArray { "$post.title", "Postcard" })
+                                }),
+                                "$post.title"
+                            })
+                        })
+                    }
+                }),
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "post.title", new BsonDocument("$cond", new BsonArray
+                        {
+                            new BsonDocument("$gte", new BsonArray
+                            {
+                                new BsonDocument("$indexOfBytes", new BsonArray { "$post.title", "Postcard" }),
+                                0
+                            }),
+                            new BsonDocument("$substrCP", new BsonArray
+                            {
+                                "$post.title",
+                                0,
+                                new BsonDocument("$indexOfBytes", new BsonArray { "$post.title", "Postcard" })
+                            }),
+                            "$post.title"
+                        })
+                    }
+                }),
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "post.is_qr", new BsonDocument("$regexMatch", new BsonDocument
+                        {
+                            { "input", "$post.original_title" },
+                            { "regex", "(?i) Qr" }
+                        })
+                    }
+                }),
+                new BsonDocument("$match", new BsonDocument
+                {
+                    { "post.deleted_flag", false },
+                    { "post.display_item", 1 }
+                }),
+                new BsonDocument("$group", new BsonDocument
+                {
+                    { "_id", "$post.title" },
+                    { "PostsList", new BsonDocument("$push", new BsonDocument
+                        {
+                            { "title", "$post.title" },
+                            { "original_title", "$post.original_title" },
+                            { "modified_title", "$post.modified_title" },
+                            { "pretty_url", "$post.pretty_url" },
+                            { "teaser_thumbnail_id", "$post.teaser_thumbnail_id" },
+                            { "teaser", "$post.teaser" },
+                            { "teaser_title", "$post.teaser_title" },
+                            { "teaser_button_text", "$post.teaser_button_text" },
+                            { "enabled_static_document", "$post.enabled_static_document" },
+                            { "created", "$post.created" },
+                            { "updated", "$post.updated" },
+                            { "size", "$post.size" },
+                            { "is_qr", "$post.is_qr" }
+                        })
+                    },
+                    { "FirstPost", new BsonDocument("$first", "$post") }
+                }),
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "PostsList", new BsonDocument("$reduce", new BsonDocument
+                        {
+                            { "input", "$PostsList" },
+                            { "initialValue", new BsonArray() },
+                            { "in", new BsonDocument("$cond", new BsonArray
+                                {
+                                    new BsonDocument("$in", new BsonArray { "$$this.pretty_url", "$$value.pretty_url" }),
+                                    "$$value",
+                                    new BsonDocument("$concatArrays", new BsonArray { "$$value", new BsonArray { "$$this" } })
+                                })
+                            }
+                        })
+                    }
+                }),
+                new BsonDocument("$project", new BsonDocument
+                {
+                    { "title", "$FirstPost.modified_title" },
+                    { "pretty_url", "$FirstPost.pretty_url" },
+                    { "teaser_thumbnail_id", "$FirstPost.teaser_thumbnail_id" },
+                    { "teaser", "$FirstPost.teaser" },
+                    { "teaser_title", "$FirstPost.teaser_title" },
+                    { "teaser_button_text", "$FirstPost.teaser_button_text" },
+                    { "enabled_static_document", "$FirstPost.enabled_static_document" },
+                    { "created", "$FirstPost.created" },
+                    { "updated", "$FirstPost.updated" },
+                    { "PostsList", "$PostsList" },
+                    { "sort", "$sort" }
+                }),
+                new ("$sort", new BsonDocument
+                {
+                    { "sort", 1 },
+                    { "updated", -1 }
+                })
+            };
+
+            var postsQuery = await _context.AggregateAsync<BsonDocument>(pipeline);
+            var postsResult = await postsQuery.ToListAsync();
+
+            List<ResultPost> result = postsResult.Select(doc => BsonSerializer.Deserialize<ResultPost>(doc)).ToList();
+
+            return result;
+        }
+
+        /// <summary>
+        /// Retrieves a list of post DTOs by the specified subcategory ID.
+        /// </summary>
+        /// <param name="subcategoryId">The ID of the subcategory to retrieve posts for.</param>
+        /// <returns>A list of post DTOs that belong to the specified interior subcategory.</returns>
+        public async Task<List<Post>> GetPostsBySubcategoryId(string subcategoryId)
+        {
+            var subcategoryIdObj = ObjectId.Parse(subcategoryId);
+            var pipeline = new List<BsonDocument>
+            {
+                new ("$match", new BsonDocument
+                {
+                    { "subcategory_id", subcategoryIdObj },
+                    { "internal_subcategory_id", BsonNull.Value },
+                    { "fourth_level_category_id", BsonNull.Value },
+                    { "fifth_level_category_id", BsonNull.Value },
+                    { "display", true },
+                    { "deleted_flag", false }
+                }),
+                new ("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new ("$unwind", "$post"),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "postsgeneral" },
+                    { "localField", "post._id" },
+                    { "foreignField", "post_id" },
+                    { "as", "postgeneral" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$postgeneral" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "files" },
+                    { "let", new BsonDocument("teaser_thumbnail_id", "$post.teaser_thumbnail_id") },
+                    { "pipeline", new BsonArray
+                        {
+                            new BsonDocument("$match", new BsonDocument
+                            {
+                                { "$expr", new BsonDocument("$and", new BsonArray
+                                    {
+                                        new BsonDocument("$ne", new BsonArray { "$$teaser_thumbnail_id", BsonNull.Value }),
+                                        new BsonDocument("$ne", new BsonArray { "$$teaser_thumbnail_id", "" }),
+
+                                        new BsonDocument("$eq", new BsonArray
+                                        {
+                                            "$_id",
+                                            new BsonDocument("$convert", new BsonDocument
+                                            {
+                                                { "input", "$$teaser_thumbnail_id" },
+                                                { "to", "objectId" },
+                                                { "onError", BsonNull.Value },
+                                                { "onNull",  BsonNull.Value }
+                                            })
+                                        })
+                                    })
+                                }
+                            })
+                        }
+                    },
+                    { "as", "file" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$file" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new ("$match", new BsonDocument
+                {
+                    { "post.deleted_flag", false },
+                    { "post.display_item", 1 }
+                }),
+                new ("$project", new BsonDocument
+                {
+                     { "_id", "$post._id" },
+                    { "title", "$post.title" },
+                    { "pretty_url", "$post.pretty_url" },
+                    { "teaser_thumbnail_id", "$file.url" },
+                    { "teaser", "$post.Teaser" },
+                    { "teaser_title", "$post.teaser_title" },
+                    { "teaser_button_text", "$post.teaser_button_text" },
+                    { "enabled_static_document", "$post.enabled_static_document" },
+                    { "created", "$post.created" },
+                    { "updated", "$post.updated" },
+                    { "author_detail","$postgeneral.author_detail" },
+                    { "sort", "$sort" }
+                }),
+                new ("$sort", new BsonDocument
+                {
+                    { "sort", 1 },
+                    { "updated", -1 }
+                })
+            };
+
+            var postsQuery = await _context.AggregateAsync<Post>(pipeline);
+            var posts = await postsQuery.ToListAsync();
+            return posts;
+        }
+
+        /// <summary>
+        /// Retrieves posts associated with a specific subcategory ID, filters them by various criteria, and groups them by account groups.
+        /// </summary>
+        /// <param name="subcategoryId">The identifier of the subcategory in string format.</param>
+        /// <returns>
+        /// A task representing the asynchronous operation, containing a list of posts grouped by account groups.
+        /// </returns>
+        /// <exception cref="FormatException">Thrown when the subcategory ID cannot be parsed as an ObjectId.</exception>
+        public async Task<List<ResultPost>> GetPostsBySubcategoryIdByAccountGroups(string subcategoryId)
+        {
+            var subcategoryIdObj = ObjectId.Parse(subcategoryId);
+            var pipeline = new List<BsonDocument>
+            {
+                new ("$match", new BsonDocument
+                {
+                    { "subcategory_id", subcategoryIdObj },
+                    { "internal_subcategory_id", BsonNull.Value },
+                    { "fourth_level_category_id", BsonNull.Value },
+                    { "display", true },
+                    { "deleted_flag", false }
+                }),
+                new ("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new ("$unwind", "$post"),
+                new ("$match", new BsonDocument
+                {
+                    { "post.deleted_flag", false },
+                    { "post.display_item", 1 }
+                }),
+                new ("$project", new BsonDocument
+                {
+                      { "_id", "$post._id" },
+                    { "title", "$post.title" },
+                    { "pretty_url", "$post.pretty_url" },
+                    { "teaser_thumbnail_id", "$post.teaser_thumbnail_id" },
+                    { "teaser", "$post.Teaser" },
+                    { "teaser_title", "$post.teaser_title" },
+                    { "teaser_button_text", "$post.teaser_button_text" },
+                    { "enabled_static_document", "$post.enabled_static_document" },
+                    { "created", "$post.created" },
+                    { "updated", "$post.updated" }
+                }),
+                new ("$sort", new BsonDocument
+                {
+                    { "updated", -1 }
+                })
+            };
+
+            var postsQuery = await _context.AggregateAsync<BsonDocument>(pipeline);
+            var posts = await postsQuery.ToListAsync();
+
+            List<ResultPost> result = posts.Select(doc => BsonSerializer.Deserialize<ResultPost>(doc)).ToList();
+            return result;
+        }
+
+        /// <summary>
+        /// Searches for post display categories based on the provided search input.
+        /// </summary>
+        /// <param name="searchInput">The search input to use for the query.</param>
+        /// <returns>A list of <see cref="SearchResponseDTO"/> objects representing the search results.</returns>
+        public async Task<List<PostSearch>> Search(
+                    string searchInput)
+        {
+            string escapedSearchTerm = Regex.Escape(searchInput);
+            var searchRegex = new BsonRegularExpression(escapedSearchTerm, "i");
+
+            var searchAggregationPipeline = new List<BsonDocument>
+            {
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new BsonDocument("$unwind", "$post"),
+
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "categories" },
+                    { "localField", "category_id" },
+                    { "foreignField", "_id" },
+                    { "as", "category" }
+                }),
+                new BsonDocument("$unwind", "$category"),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "subcategories" },
+                    { "localField", "subcategory_id" },
+                    { "foreignField", "_id" },
+                    { "as", "sub_category" }
+                }),
+                new BsonDocument("$unwind", "$sub_category"),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "interiorsubcategories" },
+                    { "localField", "internal_subcategory_id" },
+                    { "foreignField", "_id" },
+                    { "as", "interior_sub_category" }
+                }),
+                new BsonDocument("$unwind", "$interior_sub_category"),
+                new BsonDocument("$match", new BsonDocument
+                {
+                    {
+                        "$or", new BsonArray
+                        {
+                            new BsonDocument("post.title", searchRegex),
+                            new BsonDocument("category.name", searchRegex),
+                            new BsonDocument("sub_category.name", searchRegex),
+                            new BsonDocument("interior_sub_category.name", searchRegex)
+                        }
+
+                    },
+                    { "post.deleted_flag", false },
+                    { "post.display_item", 1 },
+                    { "deleted_flag", false },
+                    { "display", true },
+                    { "post.enabled_static_document", false}
+                }),
+                new BsonDocument("$project", new BsonDocument
+                {
+                    { "name", "$category.name" },
+                    { "subcategory_name", "$sub_category.name" },
+                    { "interior_subcategory_name", "$interior_sub_category.name"},
+                    { "title", "$post.title" },
+                    { "pretty_url", "$post.pretty_url" },
+                    { "teaser_thumbnail_id", "$post.teaser_thumbnail_id" },
+                    { "teaser", "$post.Teaser" },
+                    { "teaser_title", "$post.teaser_title" },
+                    { "teaser_button_text", "$post.teaser_button_text" },
+                    { "enabled_static_document", "$post.enabled_static_document" },
+                })
+            };
+
+            List<PostSearch> result = await _context
+                .Aggregate<PostSearch>(searchAggregationPipeline)
+                .ToListAsync();
+
+            return result;
+        }
+
+        /// <summary>
+        /// Searches for posts based searchtags in postgeneral, provided search input.
+        /// </summary>
+        /// <param name="searchInput">The search input to use for the query.</param>
+        /// <returns>A list of <see cref="PostSearchResponseDTO"/> objects representing the search results.</returns>
+        //Caching for repeated requests
+        private const int SearchByTagsCacheSeconds = 300; // 5 minutes
+        private static readonly ConcurrentDictionary<string, Lazy<(DateTimeOffset Created, ResponsePaginationDto<List<PostSearchResponseDTO>> Value)>> _searchByTagsCache
+                = new(StringComparer.Ordinal);
+
+        public async Task<ResponsePaginationDto<List<PostSearchResponseDTO>>> SearchByTags(int pageNumber, int pageSize, string searchInput)
+        {
+            // build cache key
+            var tenantId = _multiTenantContext?.TenantInfo?.Id ?? string.Empty;
+            string key = $"SearchByTags|t:{tenantId}|p:{pageNumber}|s:{pageSize}|q:{searchInput?.Trim() ?? string.Empty}";
+
+            // get non-expired cached value
+            if (_searchByTagsCache.TryGetValue(key, out var existingLazy))
+            {
+                try
+                {
+                    var cached = existingLazy.Value;
+                    if ((DateTimeOffset.UtcNow - cached.Created).TotalSeconds <= SearchByTagsCacheSeconds)
+                        return cached.Value;
+                    // Expired - remove
+                    _searchByTagsCache.TryRemove(key, out _);
+                }
+                catch
+                {
+                    _searchByTagsCache.TryRemove(key, out _);
+                }
+            }
+
+            // avoid duplicate concurrent executions
+            var newLazy = new Lazy<(DateTimeOffset, ResponsePaginationDto<List<PostSearchResponseDTO>>)>(() =>
+            {
+                var result = ExecuteSearchByTagsAsync(pageNumber, pageSize, searchInput).GetAwaiter().GetResult();
+                return (DateTimeOffset.UtcNow, result);
+            }, LazyThreadSafetyMode.ExecutionAndPublication);
+
+            var lazy = _searchByTagsCache.GetOrAdd(key, newLazy);
+
+            try
+            {
+                var entry = lazy.Value;
+                return entry.Value;
+            }
+            catch
+            {
+                _searchByTagsCache.TryRemove(key, out _);
+                throw;
+            }
+        }
+
+        private async Task<ResponsePaginationDto<List<PostSearchResponseDTO>>> ExecuteSearchByTagsAsync(int pageNumber, int pageSize, string searchInput)
+        {
+            string escapedSearchTerm = Regex.Escape(searchInput);
+            var searchRegex = new BsonRegularExpression(escapedSearchTerm, "i");
+
+            var lookupStages = new List<BsonDocument>
+    {
+        new("$lookup", new BsonDocument
+        {
+            { "from", "posts" },
+            { "localField", "post_id" },
+            { "foreignField", "_id" },
+            { "as", "post" }
+        }),
+        new("$unwind", "$post"),
+        new("$lookup", new BsonDocument
+        {
+            { "from", "postsgeneral" },
+            { "localField", "post._id" },
+            { "foreignField", "post_id" },
+            { "as", "postgeneral" }
+        }),
+        new("$unwind", new BsonDocument
+        {
+            { "path", "$postgeneral" },
+            { "preserveNullAndEmptyArrays", true }
+        })
+    };
+
+            var pipeline = new List<BsonDocument>(lookupStages)
+    {
+        new("$match", new BsonDocument
+        {
+            { "postgeneral.search_tags", new BsonDocument("$regex", searchRegex) }
+        }),
+        new("$group", new BsonDocument
+        {
+            { "_id", "$post.title" },
+            { "doc", new BsonDocument("$first", "$$ROOT") }
+        }),
+        new("$replaceRoot", new BsonDocument("newRoot", "$doc")),
+        new("$facet", new BsonDocument
+        {
+            { "results", new BsonArray
+                {
+                    new BsonDocument("$lookup", new BsonDocument
+                    {
+                        { "from", "files" },
+                        { "let", new BsonDocument("teaser_thumbnail_id", "$post.teaser_thumbnail_id") },
+                        { "pipeline", new BsonArray
+                            {
+                                new BsonDocument("$match", new BsonDocument
+                                {
+                                    { "$expr", new BsonDocument("$eq", new BsonArray { "$_id", new BsonDocument("$toObjectId", "$$teaser_thumbnail_id") }) }
+                                })
+                            }
+                        },
+                        { "as", "fileDetails" }
+                    }),
+                    new BsonDocument("$unwind", new BsonDocument
+                    {
+                        { "path", "$fileDetails" },
+                        { "preserveNullAndEmptyArrays", true }
+                    }),
+                    new BsonDocument("$lookup", new BsonDocument
+                    {
+                        { "from", "categories" },
+                        { "localField", "category_id" },
+                        { "foreignField", "_id" },
+                        { "as", "category" }
+                    }),
+                    new BsonDocument("$unwind", "$category"),
+                    new BsonDocument("$lookup", new BsonDocument
+                    {
+                        { "from", "subcategories" },
+                        { "localField", "subcategory_id" },
+                        { "foreignField", "_id" },
+                        { "as", "sub_category" }
+                    }),
+                    new BsonDocument("$unwind", "$sub_category"),
+                    new BsonDocument("$lookup", new BsonDocument
+                    {
+                        { "from", "interiorsubcategories" },
+                        { "localField", "internal_subcategory_id" },
+                        { "foreignField", "_id" },
+                        { "as", "interior_sub_category" }
+                    }),
+                    new BsonDocument("$unwind", new BsonDocument
+                    {
+                        { "path", "$interior_sub_category" },
+                        { "preserveNullAndEmptyArrays", true }
+                    }),
+                    new BsonDocument("$project", new BsonDocument
+                    {
+                        { "name", "$category.name" },
+                        { "subcategory_name", "$sub_category.name" },
+                        { "interior_subcategory_name", "$interior_sub_category.name" },
+                        { "title", "$post.title" },
+                        { "pretty_url", "$post.pretty_url" },
+                        { "teaser_thumbnail_id", "$post.teaser_thumbnail_id" },
+                        { "teaser", "$post.Teaser" },
+                        { "teaser_title", "$post.teaser_title" },
+                        { "teaser_button_text", "$post.teaser_button_text" },
+                        { "enabled_static_document", "$post.enabled_static_document" },
+                        { "posttype_id", "$postgeneral.posttype_id" },
+                        { "author", "$postgeneral.author_detail.author" },
+                        { "readtime", "$postgeneral.author_detail.readTime" },
+                        { "post_id", "$post._id" },
+                        { "teaser_thumbnail_url", new BsonDocument { { "$ifNull", new BsonArray { "$fileDetails.url", BsonNull.Value } } } }
+                    }),
+                    new BsonDocument("$skip", (pageNumber - 1) * pageSize),
+                    new BsonDocument("$limit", pageSize)
+                }
+            },
+            { "total", new BsonArray
+                {
+                    new BsonDocument("$count", "count")
+                }
+            }
+        })
+    };
+
+            var facetResult = await _context.Aggregate<BsonDocument>(pipeline).FirstOrDefaultAsync();
+
+            var listSearch = facetResult?["results"].AsBsonArray
+                .Select(x => BsonSerializer.Deserialize<PostSearchResponseDTO>(x.AsBsonDocument))
+                .ToList() ?? new List<PostSearchResponseDTO>();
+
+            int totalCount = 0;
+            if (facetResult?["total"].AsBsonArray.Count > 0)
+            {
+                totalCount = facetResult["total"].AsBsonArray[0]["count"].AsInt32;
+            }
+
+            return new ResponsePaginationDto<List<PostSearchResponseDTO>>
+            {
+                Rows = listSearch,
+                TotalRows = totalCount
+            };
+        }
+
+
+        /// <summary>
+        /// Retrieves and groups posts by a list of interior subcategory IDs.
+        /// </summary>
+        /// <param name="interiorSubcategoriesIds">A list of interior subcategory IDs.</param>
+        /// <returns>A task representing the asynchronous operation, containing a list of grouped result posts.</returns>
+        public async Task<List<ResultPost>> GetPostsByInteriorSubcategoryGrouped(List<string> interiorSubcategoriesIds)
+        {
+            var interiorSubCategoryIdObjs = interiorSubcategoriesIds.Select(id => ObjectId.Parse(id)).ToList();
+
+            var pipeline = new List<BsonDocument>
+            {
+                new BsonDocument("$match", new BsonDocument
+                {
+                    { "internal_subcategory_id", new BsonDocument("$in", new BsonArray(interiorSubCategoryIdObjs)) },
+                    { "fourth_level_category_id", BsonNull.Value },
+                    { "fifth_level_category_id", BsonNull.Value },
+                    { "display", true }
+                }),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new BsonDocument("$unwind", "$post"),
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "post.teaser_thumbnail_id", new BsonDocument("$toObjectId", "$post.teaser_thumbnail_id") }
+                }),
+                new BsonDocument ("$lookup", new BsonDocument
+                {
+                    { "from", "files" },
+                    { "localField", "post.teaser_thumbnail_id" },
+                    { "foreignField", "_id" },
+                    { "as", "files" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$files" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new BsonDocument("$addFields", new BsonDocument
+                {
+                    { "post.teaser_thumbnail_id", "$files.url" }
+                }),
+                new BsonDocument("$match", new BsonDocument
+                {
+                    { "post.deleted_flag", false },
+                    { "post.display_item", 1 }
+                }),
+                new BsonDocument("$facet", new BsonDocument
+                {
+                    { "GroupedByCategory", new BsonArray
+                        {
+                            new BsonDocument("$match", new BsonDocument("post.category", new BsonDocument("$ne", BsonNull.Value))),
+                            new BsonDocument("$group", new BsonDocument
+                            {
+                                { "_id", "$post.category" },
+                                { "PostsList", new BsonDocument("$push", new BsonDocument
+                                    {
+                                        { "_id", "$post._id" },
+                                        { "title", "$post.title" },
+                                        { "original_title", "$post.original_title" },
+                                        { "modified_title", "$post.modified_title" },
+                                        { "pretty_url", "$post.pretty_url" },
+                                        { "teaser_thumbnail_id", "$post.category_image" },
+                                        { "teaser", "$post.teaser" },
+                                        { "teaser_title", "$post.teaser_title" },
+                                        { "teaser_button_text", "$post.teaser_button_text" },
+                                        { "enabled_static_document", "$post.enabled_static_document" },
+                                        { "created", "$post.created" },
+                                        { "updated", "$post.updated" },
+                                        { "size", "$post.size" },
+                                        { "is_qr", "$post.isQr" },
+                                        { "category", "$post.category" },
+                                    })
+                                },
+                                { "FirstPost", new BsonDocument("$first", "$post") }
+                            }),
+                            new BsonDocument("$addFields", new BsonDocument
+                            {
+                                { "PostsList", new BsonDocument("$reduce", new BsonDocument
+                                    {
+                                        { "input", "$PostsList" },
+                                        { "initialValue", new BsonArray() },
+                                        { "in", new BsonDocument("$cond", new BsonArray
+                                            {
+                                                new BsonDocument("$in", new BsonArray { "$$this.pretty_url", "$$value.pretty_url" }),
+                                                "$$value",
+                                                new BsonDocument("$concatArrays", new BsonArray { "$$value", new BsonArray { "$$this" } })
+                                            })
+                                        }
+                                    })
+                                }
+                            }),
+                            new BsonDocument("$project", new BsonDocument
+                            {
+                                { "_id", "$post._id" },
+                                { "title", "$FirstPost.category" },
+                                { "pretty_url", "$FirstPost.pretty_url" },
+                                { "teaser_thumbnail_id", "$FirstPost.teaser_thumbnail_id" },
+                                { "teaser", "$FirstPost.teaser" },
+                                { "teaser_title", "$FirstPost.teaser_title" },
+                                { "teaser_button_text", "$FirstPost.teaser_button_text" },
+                                { "enabled_static_document", "$FirstPost.enabled_static_document" },
+                                { "created", "$FirstPost.created" },
+                                { "updated", "$FirstPost.updated" },
+                                { "PostsList", "$PostsList" },
+                                { "sort", "$sort" }
+                            })
+                        }
+                    },
+                    { "NoCategory", new BsonArray
+                        {
+                            new BsonDocument("$match", new BsonDocument("post.category", BsonNull.Value)),
+                            new BsonDocument("$project", new BsonDocument
+                            {
+                                { "_id", "$post._id" },
+                                { "title", "$post.title" },
+                                { "original_title", "$post.original_title" },
+                                { "modified_title", "$post.modified_title" },
+                                { "pretty_url", "$post.pretty_url" },
+                                { "teaser_thumbnail_id", "$post.teaser_thumbnail_id" },
+                                { "teaser", "$post.teaser" },
+                                { "teaser_title", "$post.teaser_title" },
+                                { "teaser_button_text", "$post.teaser_button_text" },
+                                { "enabled_static_document", "$post.enabled_static_document" },
+                                { "created", "$post.created" },
+                                { "updated", "$post.updated" },
+                                { "size", "$post.size" },
+                                { "is_qr", "$post.isQr" },
+                                { "category", "$post.category" },
+                                { "category_image", "$post.category_image" }
+                            })
+                        }
+                    }
+                }),
+                new BsonDocument("$project", new BsonDocument
+                {
+                    { "finalResults", new BsonDocument("$setUnion", new BsonArray { "$GroupedByCategory", "$NoCategory" }) }
+                }),
+                new BsonDocument("$unwind", "$finalResults"),
+                new BsonDocument("$replaceRoot", new BsonDocument("newRoot", "$finalResults")),
+                new ("$sort", new BsonDocument
+                {
+                    { "sort", 1 },
+                    { "updated", -1 }
+                })
+            };
+
+            var postsQuery = await _context.AggregateAsync<BsonDocument>(pipeline);
+            var postsResult = await postsQuery.ToListAsync();
+
+            List<ResultPost> result = postsResult.Select(doc => BsonSerializer.Deserialize<ResultPost>(doc)).ToList();
+
+            return result;
+        }
+
+        /// <summary>
+        /// Searches for posts based on the provided search input and filters by a list of post IDs.
+        /// </summary>
+        /// <param name="searchInput">The search input used to filter posts.</param>
+        /// <param name="postsIds">A list of post IDs to include in the search.</param>
+        /// <returns>A task representing the asynchronous operation, containing a list of search results.</returns>
+        public async Task<List<PostSearch>> Search(string searchInput, List<string> postsIds)
+        {
+            string escapedSearchTerm = Regex.Escape(searchInput);
+            var searchRegex = new BsonRegularExpression(escapedSearchTerm, "i");
+            var postsObjectIds = postsIds.Select(id => ObjectId.Parse(id)).ToList();
+            var searchAggregationPipeline = new List<BsonDocument>
+            {
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new BsonDocument("$unwind", "$post"),
+
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "categories" },
+                    { "localField", "category_id" },
+                    { "foreignField", "_id" },
+                    { "as", "category" }
+                }),
+                new BsonDocument("$unwind", "$category"),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "subcategories" },
+                    { "localField", "subcategory_id" },
+                    { "foreignField", "_id" },
+                    { "as", "sub_category" }
+                }),
+                new BsonDocument("$unwind", "$sub_category"),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "interiorsubcategories" },
+                    { "localField", "internal_subcategory_id" },
+                    { "foreignField", "_id" },
+                    { "as", "interior_sub_category" }
+                }),
+                new BsonDocument("$unwind", "$interior_sub_category"),
+                new BsonDocument("$match", new BsonDocument
+                {
+                    {
+                        "$or", new BsonArray
+                        {
+                            new BsonDocument("post.title", searchRegex),
+                            new BsonDocument("category.name", searchRegex),
+                            new BsonDocument("sub_category.name", searchRegex),
+                            new BsonDocument("interior_sub_category.name", searchRegex),
+                        }
+
+                    },
+                    { "post.deleted_flag", false },
+                    { "post.display_item", 1 },
+                    { "deleted_flag", false },
+                    { "display", true },
+                    { "post._id", new BsonDocument("$in", new BsonArray(postsObjectIds)) },
+                    { "post.enabled_static_document", false}
+                }),
+                new BsonDocument("$project", new BsonDocument
+                {
+                    { "name", "$category.name" },
+                    { "subcategory_name", "$sub_category.name" },
+                    { "interior_subcategory_name", "$interior_sub_category.name"},
+                    { "title", "$post.title" },
+                    { "pretty_url", "$post.pretty_url" },
+                    { "teaser_thumbnail_id", "$post.teaser_thumbnail_id" },
+                    { "teaser", "$post.Teaser" },
+                    { "teaser_title", "$post.teaser_title" },
+                    { "teaser_button_text", "$post.teaser_button_text" },
+                    { "post_id", "$post._id" },
+                    { "enabled_static_document", "$post.enabled_static_document" },
+                })
+            };
+
+            List<PostSearch> result = await _context
+                .Aggregate<PostSearch>(searchAggregationPipeline)
+                .ToListAsync();
+
+            return result;
+        }
+
+
+        /// <summary>
+        /// Retrieves a list of post DTOs by the specified fourthLevelCategory ID.
+        /// </summary>
+        /// <param name="fourthLevelCategoryId">The ID of the fourthLevelCategory to retrieve posts for.</param>
+        /// <returns>A list of post DTOs that belong to the specified fourthLevelCategory.</returns>
+        public async Task<List<Post>> GetPostsByFourthLevelCategoryId(string fourthLevelCategoryId)
+        {
+            var fourthLevelCategoryIdObj = ObjectId.Parse(fourthLevelCategoryId);
+            var pipeline = new List<BsonDocument>
+            {
+                new ("$match", new BsonDocument
+                {
+                    { "fourth_level_category_id", fourthLevelCategoryIdObj },
+                    { "fifth_level_category_id", BsonNull.Value },
+                    { "display", true }
+                }),
+                new ("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new ("$unwind", "$post"),
+                new ("$match", new BsonDocument
+                {
+                    { "post.deleted_flag", false },
+                    { "post.display_item", 1 }
+                }),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "files" },
+                    { "let", new BsonDocument("teaser_thumbnail_id", "$post.teaser_thumbnail_id") },
+                    { "pipeline", new BsonArray
+                        {
+                            new BsonDocument("$match", new BsonDocument
+                            {
+                                { "$expr", new BsonDocument("$eq", new BsonArray { "$_id", new BsonDocument("$toObjectId", "$$teaser_thumbnail_id") }) }
+                            })
+                        }
+                    },
+                    { "as", "file" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$file" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new ("$project", new BsonDocument
+                {
+                    { "_id", "$post._id" },
+                    { "title", "$post.title" },
+                    { "pretty_url", "$post.pretty_url" },
+                    { "teaser_thumbnail_id", "$file.url" },
+                    { "teaser", "$post.Teaser" },
+                    { "teaser_title", "$post.teaser_title" },
+                    { "teaser_button_text", "$post.teaser_button_text" },
+                    { "enabled_static_document", "$post.enabled_static_document" },
+                    { "created", "$post.created" },
+                    { "updated", "$post.updated" },
+                    { "sort", "$sort" }
+                }),
+                new ("$sort", new BsonDocument
+                {
+                    { "sort", 1 },
+                    { "updated", -1 }
+                })
+            };
+
+            var postsQuery = await _context.AggregateAsync<Post>(pipeline);
+            var posts = await postsQuery.ToListAsync();
+
+            return posts;
+        }
+
+        /// <summary>
+        /// Retrieves a list of post DTOs by the specified fifthLevelCategory ID.
+        /// </summary>
+        /// <param name="fifthLevelCategoryId">The ID of the fifthLevelCategory to retrieve posts for.</param>
+        /// <returns>A list of post DTOs that belong to the specified fifthLevelCategory.</returns>
+        public async Task<List<Post>> GetPostsByFifthLevelCategoryId(string fifthLevelCategoryId)
+        {
+            var fifthLevelCategoryIdObj = ObjectId.Parse(fifthLevelCategoryId);
+            var pipeline = new List<BsonDocument>
+            {
+                new ("$match", new BsonDocument
+                {
+                    { "fifth_level_category_id", fifthLevelCategoryIdObj },
+                    { "display", true }
+                }),
+                new ("$lookup", new BsonDocument
+                {
+                    { "from", "posts" },
+                    { "localField", "post_id" },
+                    { "foreignField", "_id" },
+                    { "as", "post" }
+                }),
+                new ("$unwind", "$post"),
+                new ("$match", new BsonDocument
+                {
+                    { "post.deleted_flag", false },
+                    { "post.display_item", 1 }
+                }),
+                new BsonDocument("$lookup", new BsonDocument
+                {
+                    { "from", "files" },
+                    { "let", new BsonDocument("teaser_thumbnail_id", "$post.teaser_thumbnail_id") },
+                    { "pipeline", new BsonArray
+                        {
+                            new BsonDocument("$match", new BsonDocument
+                            {
+                                { "$expr", new BsonDocument("$eq", new BsonArray { "$_id", new BsonDocument("$toObjectId", "$$teaser_thumbnail_id") }) }
+                            })
+                        }
+                    },
+                    { "as", "file" }
+                }),
+                new BsonDocument("$unwind", new BsonDocument
+                {
+                    { "path", "$file" },
+                    { "preserveNullAndEmptyArrays", true }
+                }),
+                new ("$project", new BsonDocument
+                {
+                    { "_id", "$post._id" },
+                    { "title", "$post.title" },
+                    { "pretty_url", "$post.pretty_url" },
+                    { "teaser_thumbnail_id", "$file.url" },
+                    { "teaser", "$post.Teaser" },
+                    { "teaser_title", "$post.teaser_title" },
+                    { "teaser_button_text", "$post.teaser_button_text" },
+                    { "enabled_static_document", "$post.enabled_static_document" },
+                    { "created", "$post.created" },
+                    { "updated", "$post.updated" },
+                    { "sort", "$sort" }
+                }),
+                new ("$sort", new BsonDocument
+                {
+                    { "sort", 1 },
+                    { "updated", -1 }
+                })
+            };
+
+            var postsQuery = await _context.AggregateAsync<Post>(pipeline);
+            var posts = await postsQuery.ToListAsync();
+
+            return posts;
+        }
+
+    }
+}
