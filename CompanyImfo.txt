@@ -1,0 +1,1048 @@
+'use client'
+import Styles from '@/app/edit-profile/[tokenId]/edit-profile.module.scss';
+import { EditProfileLeftTab } from '@/app/edit-profile/components/LeftMenu/leftMenu';
+import { PictureSizeTitle } from '@/app/edit-profile/components/Tooltip/PictureSizeTitle';
+import themeEditProfile from '@/app/edit-profile/themeEditProfile';
+import InfoCircleIcon from "@/assets/icons/information_circle.svg";
+import { useCaslContext } from '@/components/CaslContextAPI/CaslContext';
+import ImageCard from '@/components/ImageCard/ImageCard';
+import ThrashIcon from '@/components/PageContentEditor/images/icons/trash2.svg';
+import UploadModal from '@/components/UploadModal/UploadModal';
+import WalkThroughPopup from '@/components/WalkThrough/components/WalkThroughPopup';
+import { WalkThroughStep } from '@/components/WalkThrough/Constants';
+import ManageUserService, { CompanyInformationSetting } from '@/services/modules/ManageUsers.module';
+import { useUserStore } from '@/store/commons/user';
+import { c21OfficeLocations, kentwoodOfficeLocations, lawyersOfficeLocations } from '@/utils/officeLocations';
+import { Backdrop, Box, Button, CircularProgress, FormControl, FormGroup, FormHelperText, Grid, MenuItem, Select, TextField, Typography } from '@mui/material';
+import IconButton from '@mui/material/IconButton';
+import { ThemeProvider } from '@mui/material/styles';
+import Tooltip from '@mui/material/Tooltip';
+import { useFormik } from 'formik';
+import Image from 'next/image';
+import { useEffect, useRef, useState } from 'react';
+import * as Yup from 'yup';
+import ColorPicker from './components/ColorPicker';
+
+
+const LOGO_TYPE = '6';
+const MODULE = '5';
+
+const manageUsersOptions = ManageUserService();
+
+interface LogosType {
+  id: number
+  accommodationLevel: number
+  companyLogo: string | File
+  previewCompanyLogo: string
+  urlLogo: string
+  companyLogoId: number | null
+}
+interface RealtorLogosType {
+  accommodationLevel: number
+  idImage: number
+  photoUrl: string
+}
+
+interface CompanyInformationProps {
+  tokenId: string;
+  setSelectedTab?: (tabId: number) => void;
+}
+
+const CompanyInformation = ({ tokenId, setSelectedTab }: CompanyInformationProps) => {
+  //Enable edit mode
+  const [isEditable, setIsEditable] = useState(false);
+  const [loading, setLoading] = useState<boolean>(false);
+
+  const contactInfo = useUserStore((state) => state.contactInformation)
+
+  //User profile Logo
+  const [companyLogo, setCompanyLogo] = useState(null);
+  const [previewCompanyLogo, setPreviewCompanyLogo] = useState(null);
+  const [openCompanyLogoEditor, setOpenCompanyLogoEditor] = useState(false);
+  const [urlLogo, setUrlLogo] = useState(null);
+  const [modalLogoOpen, setModalLogoOpen] = useState(false)
+  const [imageDistiontion, setImageDistiontion] = useState<string>('Logo');
+  const [companyInformationDefault, setCompanyInformationDefault] = useState<CompanyInformationSetting>(null);
+
+  const isColorPickerValid = useUserStore((state) => state.isColorPickerValid)
+
+  const handleOpenModalLogo = () => {
+    setModalLogoOpen(!modalLogoOpen);
+  }
+  //Logo options gallery
+  const [logosState, setLogosState] = useState<LogosType[]>([{ id: 0, accommodationLevel: 1, companyLogo: null, previewCompanyLogo: null, urlLogo: null, companyLogoId: null }]);
+  const [realtorLogos, setRealtorLogos] = useState<RealtorLogosType[]>();
+  const defaultLogosCount = useRef(0);
+
+  const manageFilesServiceOptions = ManageUserService();
+  const [previousUrl, setPreviousUrl] = useState(null);
+  const [isCompanyInformationValid, setIsCompanyInformationValid] = useState<boolean>(false);
+
+  const { ability } = useCaslContext();
+  const [isShowOfficeLocation, setShowOfficeLocation] = useState(false);
+  const [enableCityStateDropdown, setEnableCityStateDropdown] = useState(false);
+  const [hideCityStateField, setHideEnableCityStateField] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState('');
+  const [locationError, handleChangeOfficeLocationError] = useState(false);
+  const getCurrentUserInfo = useUserStore((state) => state.getCurrentUserInfo)
+  const [address, setAddress] = useState({ streetAddress: "", city: "", state: "", zip: "", name: "" })
+
+  const [openBottomEditor, setOpenBottomEditor] = useState(false)
+  const [isModalBottomOpen, setIsModalBottomOpen] = useState(false)
+  const [logoId, setLogoId] = useState(-1);
+  const [isBBTenant, setIsBBTenant] = useState<boolean>(false);
+
+  const handleSave = () => {
+    if (isShowOfficeLocation && !selectedLocation) {
+      setIsEditable(true);
+      handleChangeOfficeLocationError(!selectedLocation);
+      return;
+    }
+    if (ability.can('view', 'ViewLawyersLocation')) {
+      if (!selectedLocation) {
+        setIsEditable(true);
+        handleChangeOfficeLocationError(!selectedLocation);
+        return;
+      }
+    }
+    setLoading(true);
+    try {
+      const includeLocationValidation = ability.can('view', 'EnablePickupwarehouse');
+      const manageUsersOptions = ManageUserService();
+      manageUsersOptions.putUserCompanyInformation({
+        id: tokenId,
+        companyName: companyFormik.values.companyName,
+        website: companyFormik.values.website,
+        streetAddress: companyFormik.values.streetAddress,
+        city: companyFormik.values.city,
+        state: companyFormik.values.state,
+        zip: companyFormik.values.zip,
+        includeLocationValidation: includeLocationValidation,
+        addressTitle: companyFormik.values.addressTitle ?? ''
+      })
+        .then((response) => {
+          setLoading(false);
+          setIsEditable(false);
+          getCurrentUserInfo();
+          return response;
+        })
+        .catch((error) => {
+          setLoading(false);
+          throw error;
+        });
+    }
+    catch (error) {
+      setLoading(false);
+      throw error;
+    }
+  }
+  const validationSchema = Yup.object().shape({
+    companyName: Yup.string()
+      .trim('Cannot be empty or just spaces')
+      .nullable()
+      .notRequired(),
+    website: Yup.string()
+      .trim('Cannot be empty or just spaces')
+      .nullable()
+      .notRequired(),
+    streetAddress: Yup.string()
+      .trim('Cannot be empty or just spaces')
+      .max(150, 'Street Address must be fewer than 150 characters')
+      .nullable()
+      .notRequired(),
+    city: Yup.string()
+      .trim('Cannot be empty or just spaces')
+      .max(30, 'City must be fewer than 30 characters')
+      .nullable()
+      .notRequired(),
+    state: Yup.string()
+      .trim('Cannot be empty or just spaces')
+      .nullable()
+      .notRequired(),
+    zip: Yup.string().trim('Please enter a valid zip code')
+      .matches(/^[0-9]{5}$/, 'Please enter a valid zip code')
+      .required('Zip Code is required'),
+
+  });
+
+  const companyFormik = useFormik({
+    initialValues: {
+      companyName: "",
+      website: "",
+      streetAddress: "",
+      city: "",
+      state: "",
+      zip: "",
+      addressTitle: ""
+    },
+    validationSchema: validationSchema,
+    onSubmit: handleSave,
+    validateOnChange: true,
+    validateOnBlur: true,
+    validateOnMount: true,
+    enableReinitialize: true
+  });
+
+  const handleCloseEditor = (reason: string) => {
+    if (reason === 'backdropClick') {
+      return;
+    }
+
+    handleCancelCompanyPhotoChange();
+    setOpenCompanyLogoEditor(false);
+  };
+
+  const handleLogoCompanyChange = (event) => {
+    setPreviewCompanyLogo(URL.createObjectURL(event.target.files[0]));
+    setCompanyLogo(event.target.files[0]);
+    setOpenCompanyLogoEditor(true);
+  };
+  const handleCancel = async () => {
+    if (isEditable) {
+      const manageUsersOptions = ManageUserService();
+      const companyData = await manageUsersOptions.getUserCompanyInformationById(tokenId)
+      companyFormik.setValues({
+        companyName: companyData.companyName,
+        website: companyData.website,
+        streetAddress: companyData.streetAddress,
+        city: companyData.city,
+        state: companyData.state,
+        zip: companyData.zip,
+        addressTitle: companyData.addressTitle ?? ''
+      })
+      setAddress({
+        streetAddress: companyData.streetAddress,
+        city: companyData.city,
+        state: companyData.state,
+        zip: companyData.zip,
+        name: companyData.addressTitle ?? ''
+      });
+      handleChangeOfficeLocationError(false);
+    }
+  }
+
+  const handleSaveLogo = async () => {
+    setLoading(true);
+    let data = urlLogo;
+    if (companyLogo instanceof File) {
+      const fileWithNewName = new File([companyLogo], urlLogo || companyLogo.name, { type: companyLogo.type });
+      const formData = new FormData();
+      try {
+        let response;
+        if (urlLogo && urlLogo != companyInformationDefault?.yourLogoDetails?.fieldDefaultValue) {
+          formData.append('file_request', fileWithNewName);
+          formData.append('type', LOGO_TYPE);
+          formData.append('module', MODULE);
+          formData.append('by_user_id', 'true');
+          formData.append('previous_url', urlLogo);
+          response = await manageUsersOptions.putUserFiles(formData);
+        } else {
+          formData.append('file_request', companyLogo);
+          formData.append('by_user_id', 'true');
+          formData.append('type', LOGO_TYPE);
+          formData.append('module', MODULE);
+
+          response = await manageUsersOptions.postUserFiles(formData);
+        }
+        data = await response.data.file_full_url;
+        manageUsersOptions.putUserCompanyInformationLogoImage({
+          id: tokenId,
+          logos: data
+        })
+          .then((response) => {
+            setCompanyLogo(data);
+            setUrlLogo(data);
+            setLoading(false);
+            return response;
+          })
+          .catch((error) => {
+            setLoading(false);
+            console.error(error);
+          });
+      } catch (error) {
+        setLoading(false);
+        console.error('Error uploading file: ' + error.message);
+      }
+    } else if (!companyLogo) {
+      try {
+        await manageUsersOptions.putUserCompanyInformationLogoImage({
+          id: tokenId,
+          logos: ''
+        });
+        setCompanyLogo(null);
+        setPreviewCompanyLogo(null);
+      } catch (error) {
+        console.error('Error updating profile photo: ' + error.message);
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      console.error('Company logo is not a File instance');
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteBottom = async (id) => {
+    try {
+      setLoading(true)
+      const urlToDelete = logosState.find(logo => logo.id === id).urlLogo;
+      if (!checkIfDefaultLogoUrl(urlToDelete)) {
+        await manageFilesServiceOptions.deleteUserFiles(urlToDelete);
+      }
+      setLogosState(prevState =>
+        prevState.map(logo =>
+          logo.id === id ? { ...logo, previewCompanyLogo: null, urlLogo: null, companyLogo: null, companyLogoId: null } : logo
+        )
+      );
+      const data = {
+        id: tokenId,
+        realtors: {
+          logos: logosState.map((logo) => ({ photoUrl: logo.id === id ? null : logo.companyLogo, accommodationLevel: logo.accommodationLevel, idImage: logo.companyLogoId }))
+        }
+      }
+      await handleUpdateLogos(data);
+
+      setLoading(false)
+    }
+    catch (error) {
+      console.error(error)
+      setLoading(false)
+
+    }
+  }
+
+  const handleUpdateLogos = async (data) => {
+    await manageUsersOptions.putUserCompanyInformationRealtorsLogos(data)
+      .then((response) => {
+        manageUsersOptions.getUserCompanyInformationById(tokenId)
+          .then((response) => {
+            setRealtorLogos(response.realtors.logos);
+            return response;
+          })
+          .catch((error) => {
+
+            console.error(error);
+          });
+        return response;
+      })
+  }
+
+  const handleDelete = () => {
+    setLoading(true);
+    if (urlLogo && urlLogo != companyInformationDefault?.yourLogoDetails?.fieldDefaultValue) {
+      manageFilesServiceOptions.deleteUserFiles(urlLogo);
+    }
+    manageUsersOptions.putUserCompanyInformationLogoImage({
+      id: tokenId,
+      logos: null
+    })
+      .then((response) => {
+        getCurrentUserInfo();
+        setLoading(false);
+        return response;
+      })
+      .catch((error) => {
+        setLoading(false);
+        console.error(error);
+      });
+
+    setCompanyLogo(null);
+    setUrlLogo(null);
+    setPreviewCompanyLogo(null);
+
+  }
+
+  const manageFileService = async (file, type, url) => {
+    const formData = new FormData();
+    formData.append('file_request', file);
+    formData.append('type', type);
+    formData.append('module', MODULE);
+    formData.append('by_user_id', 'true');
+
+    if (file instanceof File) {
+      if (url) {
+        formData.append('previous_url', url);
+        return manageFilesServiceOptions.putUserFiles(formData)
+          .then((response) => {
+            return response.data;
+          })
+          .catch((error) => {
+            setLoading(false);
+            throw error;
+          });
+      } else {
+
+        return manageFilesServiceOptions.postUserFiles(formData)
+          .then((response) => {
+
+            return response.data;
+          })
+          .catch((error) => {
+            setLoading(false);
+            throw error;
+          });
+      }
+    }
+  }
+
+
+  const handleSaveLogos = async () => {
+    try {
+      setLoading(true);
+      let previousLogoUrl = null;
+      if (!checkIfDefaultLogoUrl(previousUrl)) {
+        previousLogoUrl = previousUrl;
+      }
+      const response = await manageFileService(logosState[logoId].companyLogo, LOGO_TYPE, previousLogoUrl)
+      setPreviousUrl(null)
+      if (response) {
+        const url = response?.file_full_url
+        setLogosState(prevState =>
+          prevState.map(logo =>
+            logo.id === logoId ? { ...logo, previewCompanyLogo: null, urlLogo: null } : logo
+          )
+        );
+
+        const data = {
+          id: tokenId,
+          realtors: {
+            logos: logosState.map((logo) => ({ photoUrl: logo.id === logoId ? url : logo.companyLogo, accommodationLevel: logo.accommodationLevel, idImage: logo.companyLogoId ?? null }))
+          },
+        };
+        await handleUpdateLogos(data)
+
+        setLoading(false)
+      }
+    } catch (error) {
+    }
+  }
+
+  const handlSetProfilePhotoBottomModal = (photo: File) => {
+    setLogosState(previous => previous.map((logo) => logo.id === logoId ? { ...logo, companyLogo: photo } : logo))
+  }
+
+  const handleSetPreviewImageBottomModal = (image: string) => {
+    setLogosState(previous => previous.map((logo) => logo.id === logoId ? { ...logo, previewCompanyLogo: image } : logo))
+  }
+
+  const handleZipChange = (e, setFieldValue, field) => {
+    setFieldValue(field, e.target.value);
+    companyFormik.setFieldTouched(field, true, false);
+    companyFormik.validateField(field);
+  };
+  const handleStateChange = (e, setFieldValue, field) => {
+    setFieldValue(field, e.target.value);
+  };
+
+  useEffect(() => {
+    try {
+      const manageUsersOptions = ManageUserService();
+
+      const getCompanyInformationDefaultInfo = async () => {
+        try {
+          const companyInformationDefaultResponse = await manageUsersOptions.getMappedCompanyInformationDefault();
+          if (companyInformationDefaultResponse !== undefined && companyInformationDefaultResponse !== null)
+            setCompanyInformationDefault(companyInformationDefaultResponse);
+          else
+            setIsCompanyInformationValid(true);
+          defaultLogosCount.current = companyInformationDefaultResponse?.yourLogoGalleryDetails?.multipleValues?.length ?? 3;
+        } catch (error) {
+          console.error('Error fetching data:', error);
+        }
+        const userCompanyInformationResponse = await manageUsersOptions.getUserCompanyInformationById(tokenId);
+        if (userCompanyInformationResponse !== undefined && userCompanyInformationResponse !== null) {
+          companyFormik.setValues({
+            companyName: userCompanyInformationResponse.companyName,
+            website: userCompanyInformationResponse.website,
+            streetAddress: userCompanyInformationResponse.streetAddress,
+            city: userCompanyInformationResponse.city,
+            state: userCompanyInformationResponse.state,
+            zip: userCompanyInformationResponse.zip,
+            addressTitle: userCompanyInformationResponse.addressTitle ?? ''
+          })
+          setAddress({
+            streetAddress: userCompanyInformationResponse.streetAddress,
+            city: userCompanyInformationResponse.city,
+            state: userCompanyInformationResponse.state,
+            zip: userCompanyInformationResponse.zip,
+            name: userCompanyInformationResponse.addressTitle ?? ''
+          });
+          setCompanyLogo(userCompanyInformationResponse.logos);
+          setUrlLogo(userCompanyInformationResponse.logos);
+          if (userCompanyInformationResponse.realtors.logos.length > 0) {
+            setRealtorLogos(userCompanyInformationResponse.realtors.logos);
+          }
+        }
+
+      };
+
+      getCompanyInformationDefaultInfo();
+
+    }
+    catch (error) {
+      throw error;
+    }
+  }
+    , [tokenId]);
+
+  const getSortLogosState = (logosState: LogosType[]): LogosType[] => {
+    return logosState.sort((a, b) => a.accommodationLevel - b.accommodationLevel);
+  }
+
+  const checkIfDefaultLogoUrl = (logoUrl: string): boolean => {
+    const defaultLogoInfo = companyInformationDefault?.yourLogoGalleryDetails?.multipleValues.find(defaultLogo => defaultLogo.value === logoUrl);
+    if (defaultLogoInfo)
+      return true;
+    return false;
+  }
+
+  const deleteExtraLogs = async (extraLogos: RealtorLogosType[]) => {
+    try {
+      setLoading(true);
+      for (const logo of extraLogos) {
+        if (!checkIfDefaultLogoUrl(logo.photoUrl)) {
+          await manageFilesServiceOptions.deleteUserFiles(logo.photoUrl);
+        }
+      }
+      const deleteLogosPayload = realtorLogos.map((logo) => {
+        const isExtraLogo = extraLogos.find(extraLogo => extraLogo.idImage === logo.idImage);
+        return { photoUrl: isExtraLogo ? null : logo.photoUrl, accommodationLevel: logo.accommodationLevel, idImage: logo.idImage }
+      });
+      const data = {
+        id: tokenId,
+        realtors: {
+          logos: deleteLogosPayload
+        }
+      }
+
+      await handleUpdateLogos(data);
+      setLoading(false)
+    }
+    catch (error) {
+      console.error(error)
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (realtorLogos?.length > 0) {
+      if (defaultLogosCount.current == realtorLogos.length) {
+        const logos: LogosType[] = realtorLogos.map((logo, index) => ({ id: index, accommodationLevel: logo.accommodationLevel, companyLogo: logo.photoUrl ?? null, companyLogoId: logo.idImage ?? null, urlLogo: logo.photoUrl, previewCompanyLogo: null }));
+        const sortedLogos = getSortLogosState(logos);
+        setLogosState(sortedLogos);
+      }
+      else if (defaultLogosCount.current > realtorLogos.length) {
+        const existingLogos = [...realtorLogos];
+        const newLogos: LogosType[] = Array.from({ length: defaultLogosCount.current }, (v, i) => ({
+          id: i, accommodationLevel: i + 1, companyLogo: null, urlLogo: null, previewCompanyLogo: null, companyLogoId: null
+        }));
+        existingLogos.forEach(logo => {
+          const match = newLogos.find(newLogo => newLogo.accommodationLevel === logo.accommodationLevel);
+          if (match) {
+            match.companyLogo = logo.photoUrl;
+            match.urlLogo = logo.photoUrl;
+            match.previewCompanyLogo = null
+            match.companyLogoId = logo.idImage;
+          }
+        });
+        const sortedLogos = getSortLogosState(newLogos);
+        setLogosState(sortedLogos);
+      }
+      const hasExtraLogos = realtorLogos.find(logo => logo.accommodationLevel > defaultLogosCount.current && logo.idImage !== null);
+      const checkAndDeleteExtraLogos = async () => {
+        if (hasExtraLogos && companyInformationDefault) {
+          const extraLogos = realtorLogos.filter(logo => logo.accommodationLevel > defaultLogosCount.current);
+          if (extraLogos?.length > 0) {
+            await deleteExtraLogs(extraLogos);
+          }
+        }
+      }
+      checkAndDeleteExtraLogos();
+    }
+    else {
+      const defaultLogos: LogosType[] = Array.from({ length: 3 }, (v, i) => ({
+        id: i, accommodationLevel: i + 1, companyLogo: null, urlLogo: null, previewCompanyLogo: null, companyLogoId: null
+      }));
+      const sortedDefaultLogos = getSortLogosState(defaultLogos);
+      setLogosState(sortedDefaultLogos);
+    }
+  }, [realtorLogos])
+
+  const handleOpenBottomModal = (id?) => {
+    if (typeof id === 'number') {
+      setLogoId(id)
+      const previousUrl = logosState.find((logo => logo.id === id)).urlLogo
+      setPreviousUrl(previousUrl)
+    }
+    setIsModalBottomOpen(!isModalBottomOpen)
+  };
+
+  const handleCloseBottomEditor = () => {
+    const missingLogoIndex = logosState.findIndex(logo => !logo.urlLogo);
+    if (missingLogoIndex !== -1) {
+      setLogoId(missingLogoIndex);
+    }
+
+    handleCancelLogoChange();
+    setOpenBottomEditor(false);
+  };
+
+  useEffect(() => {
+    setImageDistiontion('Logo');
+    if (!logosState) return;
+    const missingLogoIndex = logosState.findIndex(logo => !logo.urlLogo);
+    if (missingLogoIndex !== -1 && !isModalBottomOpen) {
+      setLogoId(missingLogoIndex);
+    }
+  }, [logosState]);
+
+  const handleCancelLogoChange = async () => {
+    try {
+      const response = await manageUsersOptions.getUserCompanyInformationById(tokenId)
+      if (response?.realtors?.logos) {
+        setRealtorLogos(response.realtors.logos);
+      }
+    }
+    catch (error) {
+      console.error('Error on fetching data: ' + error.message)
+    }
+  }
+
+  const handleLogosChange = (event) => {
+    const file = event.target.files[0]
+    const url = URL.createObjectURL(event.target.files[0])
+    setLogosState(previous => previous.map((logo) => logo.id === logoId ? { ...logo, previewCompanyLogo: url, urlLogo: null, companyLogo: file } : logo))
+    setOpenBottomEditor(true);
+
+  };
+
+  const handleCancelCompanyPhotoChange = async () => {
+    try {
+      const companyData = await manageUsersOptions.getUserCompanyInformationById(tokenId);
+      setCompanyLogo(companyData.logos)
+    }
+    catch (error) {
+      console.error('Error on fetching data: ' + error.message)
+    }
+
+  }
+  const handleOfficeLocationChange = (event) => {
+    const value = event.target.value;
+    handleChangeOfficeLocationError(!value);
+    if (!value) {
+      setSelectedLocation(value);
+      return;
+    }
+    if (ability.can('view', 'ViewLawyersLocation')) {
+      setSelectedLocation(value);
+      companyFormik.setFieldValue('addressTitle', value);
+      return;
+    }
+    const [streetAddress, city, state, zip, name] = value.split('-');
+
+    setSelectedLocation(value);
+    companyFormik.setFieldValue('streetAddress', streetAddress);
+    companyFormik.setFieldValue('city', city);
+    companyFormik.setFieldValue('state', state);
+    companyFormik.setFieldValue('zip', zip);
+    companyFormik.setFieldValue('addressTitle', name ?? '');
+  }
+
+  useEffect(() => {
+    if (ability.can('view', 'ViewOfficeLocationDropdown') || ability.can('view', 'ViewLocationDropdown')) {
+      setShowOfficeLocation(true);
+      const formattedAddress = `${address.streetAddress}-${address.city}-${address.state}-${address.zip}-${address.name ?? ''}`;
+      setSelectedLocation(formattedAddress);
+      setEnableCityStateDropdown(true);
+    } if (ability.can('view', 'ViewLawyersLocation')) {
+      setHideEnableCityStateField(true);
+      setEnableCityStateDropdown(true);
+      setSelectedLocation(address.name ?? '');
+    } if (ability.can('view', 'EnableBB20Features'))
+      setIsBBTenant(true);
+  }, [ability, address])
+  return (
+    <ThemeProvider theme={themeEditProfile}>
+      <Grid item xs={12} >
+        <Backdrop
+          sx={{ color: '#fff', zIndex: (theme) => theme.zIndex.drawer + 1 }}
+          open={loading}
+        >
+          <CircularProgress color="inherit" />
+        </Backdrop>
+        <Grid container className={Styles.formContainer}>
+          <Grid>
+            <Typography className={Styles.titleContainer}>Company Information</Typography>
+            <Typography className={Styles.subTextContainer}>Fill in your company information below to have it automatically displayed on all marketing templates.</Typography>
+          </Grid>
+          <WalkThroughPopup popupStepId={WalkThroughStep.Ten} />
+          <form noValidate autoComplete="off" className={Styles.form}>
+            <Grid container className={Styles.gridTooltip}>
+              <Typography className={`h2-font ${Styles.subTitleContainer}`}>About Your Company</Typography>
+              <Box className={Styles.flexEndBox}>
+                {isEditable ?
+                  <Box className={Styles.flexEndBox}>
+                    <Button sx={{ m: 1 }} {...(isBBTenant ? { variant: "outlined" } : {})} className={isBBTenant ? `${Styles["button-save-profile"]} ${Styles['button-height']}` : Styles.editButton}
+                      {...(!isBBTenant ? { color: "inherit" } : {})} onClick={() => { setIsEditable(!isEditable), handleSave() }} disabled={!companyFormik.isValid || !companyFormik.dirty}>
+                      <Typography {...(!isBBTenant ? { variant: "overline" } : {})} textTransform={'none'} className={Styles.editButtonText}>Save</Typography>
+                    </Button>
+                  </Box>
+                  : null
+                }
+                <Box className={Styles.flexEndBox}>
+                  <Button sx={{ m: 1 }} className={isEditable && !isBBTenant ? Styles.editButton : (isBBTenant ? `${Styles["button-save-profile"]} ${Styles['button-height']}` : Styles.editButton)} {...(isBBTenant ? { variant: "outlined" } : {})} onClick={() => { setIsEditable(!isEditable); handleCancel(); }}>
+                    <Typography {...(!isBBTenant ? { variant: "overline" } : {})} textTransform="none" className={isBBTenant ? Styles.editButtonText : Styles.cancelButtonText}>{isEditable ? 'Cancel' : 'Edit'}</Typography>
+                  </Button>
+                </Box>
+              </Box>
+            </Grid>
+            {(isCompanyInformationValid || companyInformationDefault?.companyNameDetails?.isDisplay) &&
+              <Box className={Styles.boxInput}>
+                <Typography className={Styles.label}>{companyInformationDefault?.companyNameDetails?.fieldDisplayName ?? 'Company Name'}</Typography>
+                <TextField
+                  size="small"
+                  className={Styles.textInput}
+                  placeholder='Add Company Name'
+                  name="companyName"
+                  value={companyFormik.values.companyName}
+                  fullWidth
+                  margin="normal"
+                  disabled={!isEditable || companyInformationDefault?.companyNameDetails?.isLocked}
+                  onChange={companyFormik.handleChange}
+                  onBlur={companyFormik.handleBlur}
+                  error={companyFormik.touched.companyName && Boolean(companyFormik.errors.companyName)}
+                  helperText={companyFormik.touched.companyName && companyFormik.errors.companyName}
+                  sx={{ "& input::placeholder": { fontFamily: "var(--font-h3) !important" }, }}
+                />
+              </Box>}
+            {(isCompanyInformationValid || companyInformationDefault?.websiteDetails?.isDisplay) &&
+              <Box className={Styles.boxInput}>
+                <Typography className={Styles.label}>{companyInformationDefault?.websiteDetails?.fieldDisplayName ?? 'Website'}</Typography>
+                <TextField
+                  size="small"
+                  className={Styles.textInput}
+                  placeholder='http://'
+                  name="website"
+                  value={companyFormik.values.website}
+                  fullWidth
+                  margin="normal"
+                  disabled={!isEditable || companyInformationDefault?.websiteDetails?.isLocked}
+                  onChange={companyFormik.handleChange}
+                  onBlur={companyFormik.handleBlur}
+                  error={companyFormik.touched.website && Boolean(companyFormik.errors.website)}
+                  helperText={companyFormik.touched.website && companyFormik.errors.website}
+                  sx={{ "& input::placeholder": { fontFamily: "var(--font-h3) !important" }, }}
+                />
+              </Box>}
+            {(isCompanyInformationValid || companyInformationDefault?.companyAddressDetails?.isDisplay) && (isShowOfficeLocation) &&
+              <Box>
+                <Box className={Styles['box-select']}>
+                  <Typography className={Styles.label}>Office Location</Typography>
+
+                  <FormGroup className={Styles['option-container']}>
+                    <Select
+                      size="small"
+                      placeholder='Add Company Address'
+                      name="streetAddress"
+                      value={selectedLocation}
+                      fullWidth
+                      displayEmpty
+                      disabled={!isEditable || companyInformationDefault?.companyAddressDetails?.isLocked}
+                      onChange={handleOfficeLocationChange}
+                      className={Styles['option-container']}
+                      error={locationError}
+                      sx={{ "& input::placeholder": { fontFamily: "var(--font-h3) !important" }, }}
+                    >
+                      <MenuItem value="">
+                        <em className={Styles['select-text']}>Select Office</em>
+                      </MenuItem>
+                      {ability.can('view', 'ViewLocationDropdown') && kentwoodOfficeLocations.map((location, index) => {
+                        const formattedName = `${location.name}`;
+                        const formattedValue = `${location.streetAddress}-${location.city}-${location.state}-${location.zip}-${location.name}`;
+                        return (
+                          <MenuItem className={Styles['select-text']} key={index} value={formattedValue} data-name={formattedName}>
+                            {formattedName}
+                          </MenuItem>
+                        );
+                      })}
+                      {ability.can('view', 'ViewOfficeLocationDropdown') && c21OfficeLocations.map((location, index) => {
+                        const formattedName = `${location.streetAddress}, ${location.city}, ${location.state}, ${location.zip}`;
+                        const formattedValue = `${location.streetAddress}-${location.city}-${location.state}-${location.zip}-${location.name ? location.name : ''}`;
+                        return (
+                          <MenuItem className={Styles['select-text']} key={index} value={formattedValue} data-name={formattedName}>
+                            {formattedName}
+                          </MenuItem>
+                        );
+                      })}
+                    </Select>
+                    {(locationError && isEditable) && <FormHelperText className={Styles['required-text-align']} error>Please select office location</FormHelperText>}
+                  </FormGroup>
+                </Box>
+              </Box>}
+            {hideCityStateField &&
+              <Box>
+                <Box className={Styles['box-select']}>
+                  <Typography className={Styles.label}>Office Location</Typography>
+                  <FormControl className={Styles['option-container']}>
+                    <Select
+                      size="small"
+                      placeholder='Add Company Address'
+                      name="streetAddress"
+                      value={selectedLocation}
+                      fullWidth
+                      displayEmpty
+                      disabled={!isEditable}
+                      onChange={handleOfficeLocationChange}
+                      className={Styles['option-container']}
+                      error={locationError}
+                      sx={{ "& input::placeholder": { fontFamily: "var(--font-h3) !important" }, }}
+                    >
+                      <MenuItem value="">
+                        <em className={Styles['select-text']}>Select Office</em>
+                      </MenuItem>
+                      {ability.can('view', 'ViewLawyersLocation') && lawyersOfficeLocations.map((location, index) => {
+                        const formattedName = `${location.name}`;
+                        const formattedValue = `${location.name}`;
+                        return (
+                          <MenuItem className={Styles['select-text']} key={index} value={formattedValue} data-name={formattedName}>
+                            {formattedName}
+                          </MenuItem>
+                        );
+                      })}
+                    </Select>
+                    {(locationError && isEditable) && <FormHelperText error>Please select office location</FormHelperText>}
+                  </FormControl>
+                </Box>
+              </Box>}
+            {(isCompanyInformationValid || companyInformationDefault?.companyAddressDetails?.isDisplay) && !isShowOfficeLocation &&
+              <Box className={Styles.boxInput}>
+                <Typography className={Styles.label}>{companyInformationDefault?.companyAddressDetails?.fieldDisplayName ?? 'Company Address'}</Typography>
+                <TextField
+                  size="small"
+                  className={Styles.textInput}
+                  placeholder='Add Company Address'
+                  name="streetAddress"
+                  value={companyFormik.values.streetAddress}
+                  fullWidth
+                  margin="normal"
+                  disabled={!isEditable || companyInformationDefault?.companyAddressDetails?.isLocked}
+                  onChange={companyFormik.handleChange}
+                  onBlur={companyFormik.handleBlur}
+                  error={companyFormik.touched.streetAddress && Boolean(companyFormik.errors.streetAddress)}
+                  helperText={companyFormik.touched.streetAddress && companyFormik.errors.streetAddress}
+                  sx={{ "& input::placeholder": { fontFamily: "var(--font-h3) !important" }, }}
+                />
+              </Box>}
+            {(isCompanyInformationValid || companyInformationDefault?.cityDetails?.isDisplay) && !isShowOfficeLocation && !enableCityStateDropdown &&
+              <Box className={Styles.boxInput}>
+                <Typography className={Styles.label}>{companyInformationDefault?.cityDetails?.fieldDisplayName ?? 'City'}</Typography>
+                <TextField
+                  size="small"
+                  className={Styles.textInput}
+                  placeholder='Add City'
+                  name="city"
+                  value={companyFormik.values.city}
+                  fullWidth
+                  margin="normal"
+                  disabled={!isEditable || companyInformationDefault?.cityDetails?.isLocked}
+                  onChange={companyFormik.handleChange}
+                  onBlur={companyFormik.handleBlur}
+                  error={companyFormik.touched.city && Boolean(companyFormik.errors.city)}
+                  helperText={companyFormik.touched.city && companyFormik.errors.city}
+                  sx={{ "& input::placeholder": { fontFamily: "var(--font-h3) !important" }, }}
+                />
+              </Box>}
+            {(isCompanyInformationValid || companyInformationDefault?.stateDetails?.isDisplay) && !isShowOfficeLocation && !enableCityStateDropdown &&
+              <Box className={Styles.boxInput}>
+                <Typography className={Styles.label}>{companyInformationDefault?.stateDetails?.fieldDisplayName ?? 'State'}</Typography>
+                <TextField
+                  size="small"
+                  className={Styles.textInput}
+                  placeholder='Add State'
+                  name="state"
+                  value={companyFormik.values.state}
+                  fullWidth
+                  margin="normal"
+                  disabled={!isEditable || companyInformationDefault?.stateDetails?.isLocked}
+                  onChange={(e) => { handleStateChange(e, companyFormik.setFieldValue, 'state') }}
+                  onBlur={companyFormik.handleBlur}
+                  error={companyFormik.touched.state && Boolean(companyFormik.errors.state)}
+                  helperText={companyFormik.touched.state && companyFormik.errors.state}
+                  sx={{ "& input::placeholder": { fontFamily: "var(--font-h3) !important" }, }}
+                />
+              </Box>}
+            {(isCompanyInformationValid || companyInformationDefault?.zipCodeDetails?.isDisplay) && !isShowOfficeLocation &&
+              <Box className={Styles.boxInput}>
+                <Typography className={Styles.label}>{companyInformationDefault?.zipCodeDetails?.fieldDisplayName ?? 'Zip Code'}</Typography>
+                <TextField
+                  size="small"
+                  className={Styles.textInput}
+                  placeholder='Add Zip Code'
+                  name="zip"
+                  value={companyFormik.values.zip}
+                  fullWidth
+                  margin="normal"
+                  disabled={!isEditable || companyInformationDefault?.zipCodeDetails?.isLocked}
+                  onBlur={companyFormik.handleBlur}
+                  error={companyFormik.touched.zip && Boolean(companyFormik.errors.zip)}
+                  helperText={companyFormik.touched.zip && companyFormik.errors.zip}
+                  InputProps={{ inputProps: { className: Styles.noSpinners, maxLength: 6 } }}
+                  onChange={(e) => handleZipChange(e, companyFormik.setFieldValue, 'zip')}
+                  sx={{ "& input::placeholder": { fontFamily: "var(--font-h3) !important" }, }}
+                />
+              </Box>}
+            <div className={Styles.separatorEdit} />
+            <Grid container className={`${Styles.gridTooltip} ${Styles['grid-tooltip-extra-width']} ${Styles['extra-margin-text']} `}>
+              <Typography className={`${Styles.subTitleContainer} `}>Your Logo
+                <Tooltip className={Styles.tooltip} title={<PictureSizeTitle />} placement="right">
+                  <IconButton >
+                    <Image alt="info-tooltip-icon" src={InfoCircleIcon} className={Styles.iconInfo} />
+                  </IconButton>
+                </Tooltip>
+              </Typography>
+              <WalkThroughPopup popupStepId={WalkThroughStep.Eleven} onClickNextCallBack={() => setSelectedTab(EditProfileLeftTab.Team_Management)} />
+              <Box className={Styles.flexEndBox}>
+                {!companyLogo ? <Box className={Styles.flexEndBox}>
+                  <Button className={isBBTenant ? `${Styles['button-save-profile']} ${Styles['button-height']} ${Styles['button-logo-align']}}` : Styles.editButton}  {...(isBBTenant ? { variant: "outlined" } : {})} onClick={handleOpenModalLogo}>
+                    <Typography {...(!isBBTenant ? { variant: "overline" } : {})} textTransform={'none'} className={Styles.editButtonText}>Add Logo</Typography>
+                  </Button>
+                </Box>
+                  :
+                  <Box className={Styles.flexEndBox}>
+                    {(isCompanyInformationValid || companyInformationDefault?.yourLogoGalleryDetails?.isDisplay) && <Button className={isBBTenant ? `${Styles["button-save-profile"]} ${Styles['button-height']}` : `${Styles.editButton} ${Styles['button-height']}`} onClick={handleOpenModalLogo} {...(isBBTenant ? { variant: "outlined" } : {})}>
+                      <Typography {...(!isBBTenant ? { variant: "overline" } : {})} textTransform={'none'} className={Styles.editButtonText}>Edit</Typography>
+                    </Button>}
+                    {(isCompanyInformationValid || companyInformationDefault?.yourLogoGalleryDetails?.isDisplay) && <Button className={`${Styles.deleteButton} ${Styles['button-height']}`} onClick={handleDelete} variant='text'>
+                      <Typography variant="overline" textTransform={'none'} className={Styles.deleteButtonText} ><Image src={ThrashIcon} alt="Design Icon" className={Styles.deleteIcon} /> Delete</Typography>
+                    </Button>}
+                  </Box>
+                }
+              </Box>
+            </Grid>
+            <Grid className={Styles.imageCard}>
+              <UploadModal
+                id={'1'}
+                isOpen={modalLogoOpen}
+                openCloseModal={handleOpenModalLogo}
+                handleProfilePhotoChange={handleLogoCompanyChange}
+                profilePhoto={companyLogo}
+                setProfilePhoto={setCompanyLogo}
+                openProfileEditor={openCompanyLogoEditor}
+                setOpenProfileEditor={setOpenCompanyLogoEditor}
+                handleCloseEditor={handleCloseEditor}
+                previewImage={previewCompanyLogo}
+                setPreviewImage={setPreviewCompanyLogo}
+                handleSaveProfilePhoto={handleSaveLogo}
+                imageDistiontion={imageDistiontion}
+                shouldZoomByDefault={true}
+              />
+              {isBBTenant ? (
+                <Box onClick={handleOpenModalLogo} style={{ cursor: 'pointer', display: 'contents' }}>
+                  <ImageCard imageUrl={companyLogo} location="Company" />
+                </Box>
+              ) : (
+                <ImageCard imageUrl={companyLogo} location="Company" />
+              )
+              }
+            </Grid>
+            <div className={Styles.separatorEdit} />
+            <Grid container className={Styles.gridTooltip}>
+              <div className={Styles.descriptionTooltip}>
+                <Typography className={`${Styles.subTitleContainer} ${Styles.subTitleContent} ${Styles['subtitle-margin-extra']}`}>Your Logo Gallery
+                  <Tooltip className={Styles.tooltip} title={<PictureSizeTitle />} placement="right">
+                    <IconButton >
+                      <Image alt="info-tooltip-icon" src={InfoCircleIcon} className={Styles.iconInfo} />
+                    </IconButton>
+                  </Tooltip>
+                </Typography>
+                <div className={`${Styles.infoButton} ${Styles['extra-margin-text']}`}>
+                  <Typography className={Styles.subTextContainer}>Upload your logo options and choose from them when designing.</Typography>
+                  <Box className={Styles.flexEndBox}>
+                    {(isCompanyInformationValid || companyInformationDefault?.yourLogoGalleryDetails?.isDisplay) && logosState.find(logo => logo.companyLogo == null || logo.companyLogo == '')
+                      ? (<Button className={isBBTenant ? `${Styles["button-save-profile"]} ${Styles['button-height']}` : Styles.editButton} onClick={handleOpenBottomModal} {...(isBBTenant ? { variant: "outlined" } : {})}>
+                        <Typography {...(!isBBTenant ? { variant: "overline" } : {})} textTransform={'none'} className={Styles.editButtonText}>Add Logo</Typography>
+                      </Button>)
+                      : null
+                    }
+                  </Box>
+                </div>
+              </div>
+            </Grid>
+            <UploadModal
+              id={'2'}
+              isOpen={isModalBottomOpen}
+              openCloseModal={handleOpenBottomModal}
+              handleProfilePhotoChange={handleLogosChange}
+              profilePhoto={logosState[logoId]?.companyLogo instanceof File ? logosState[logoId]?.companyLogo : null}
+              setProfilePhoto={handlSetProfilePhotoBottomModal}
+              openProfileEditor={openBottomEditor}
+              setOpenProfileEditor={setOpenBottomEditor}
+              handleCloseEditor={handleCloseBottomEditor}
+              previewImage={logosState[logoId]?.previewCompanyLogo}
+              setPreviewImage={handleSetPreviewImageBottomModal}
+              handleSaveProfilePhoto={handleSaveLogos}
+              imageDistiontion={imageDistiontion}
+            />
+            <Grid container spacing={3} className={Styles['company-images-container']}>
+              {(() => {
+                return logosState.map((logo, index) => (
+                  <Grid item xs={12} sm={4} md={4} className={Styles.imageCard} key={logo.id || index}>
+                    {isBBTenant ? (
+                      <Box onClick={() => handleOpenBottomModal(logo.id)} style={{ cursor: 'pointer' }}>
+                        <ImageCard
+                          imageUrl={
+                            logo?.companyLogo instanceof File
+                              ? URL.createObjectURL(logo.companyLogo)
+                              : logo?.companyLogo ?? ''
+                          }
+                          location="Company"
+                        />
+                      </Box>
+                    ) : (
+                      <ImageCard
+                        imageUrl={
+                          logo?.companyLogo instanceof File
+                            ? URL.createObjectURL(logo.companyLogo)
+                            : logo?.companyLogo ?? ''
+                        }
+                        location="Company"
+                      />
+                    )}
+                    {logo.companyLogo && (
+                      <Box className={`${Styles.flexEndBox} ${Styles['margin-top-15']}`}>
+                        <Button
+                          sx={{ m: 1 }}
+                          className={isBBTenant ? `${Styles["button-save-profile"]} ${Styles['button-height']}` : Styles.editButton}
+                          onClick={() => handleOpenBottomModal(logo.id)}
+                          {...(isBBTenant ? { variant: "outlined" } : {})}
+                        >
+                          <Typography {...(!isBBTenant ? { variant: "overline" } : {})} textTransform="none" className={Styles.editButtonText}>
+                            Edit
+                          </Typography>
+                        </Button>
+                        <Button
+                          sx={{ m: 1 }}
+                          className={Styles.deleteButton}
+                          onClick={() => handleDeleteBottom(logo.id)}
+                          variant="text"
+                        >
+                          <Typography variant="overline" textTransform="none" className={Styles.deleteButtonText}>
+                            <Image src={ThrashIcon} alt="Design Icon" className={Styles.deleteIcon} /> Delete
+                          </Typography>
+                        </Button>
+                      </Box>
+                    )}
+                  </Grid>
+                ));
+              })()}
+            </Grid>
+          </form>
+          {isColorPickerValid && (
+            <ColorPicker tokenId={tokenId} primaryColor={contactInfo.accountBrandColor} />
+          )}
+        </Grid>
+      </Grid>
+    </ThemeProvider>
+  );
+}
+export default CompanyInformation;
